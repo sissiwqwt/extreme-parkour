@@ -2,3 +2,13 @@ isaacgym*
 .ipynb_checkpoints/
 .vscode/
 *img
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.log
+*.out
+*.synctex.gz
+*.pdf
