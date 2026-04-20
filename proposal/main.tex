@@ -73,28 +73,28 @@
 \maketitle
 
 \begin{abstract}
-  We propose to develop a quadruped robot capable of executing extreme parkour tasks in simulation, leveraging vision-based reinforcement learning. Our approach builds upon the Extreme Parkour baseline, enhancing it through two main weapons.The first one is task-targeted curriculum learning to independently scale difficulty per obstacle type, which improves learning efficiency and policy generalization.The second one is pretrained heading prediction and teacher-to-student distillation, explicitly separating “where to go” from “how to move” to improve directional precision on narrow or misaligned obstacles.
+  We propose to develop a quadruped robot capable of executing extreme parkour tasks in simulation, leveraging vision-based reinforcement learning. Our approach builds upon the Extreme Parkour baseline and enhances it through two main components. The first is task-targeted curriculum learning to independently scale difficulty by obstacle type, which improves learning efficiency and policy generalization. The second is pretrained heading prediction and teacher-to-student distillation, explicitly separating “where to go” from “how to move” to improve directional precision on narrow or misaligned obstacles.
 
 \setlength{\parindent}{2em}  We expect our robot to perform jumps, gaps, and step sequences with high success rates on both standard and novel terrains, including challenging bean gaps, biased gaps, and randomized \textit{parkour v2 }courses.
 \end{abstract}
 
 \IEEEpeerreviewmaketitle
 
-\section{motivation and problem statement}
+\section{Motivation and Problem Statement}
 
 Inspired by \citet{cheng2024extreme}, we identify two limitations in existing learning-based parkour methods. First, curriculum learning is often applied globally, which may overemphasize easier tasks while insufficiently exploring more difficult obstacles. Second, student policies typically lack explicit heading pretraining, which can reduce stability on direction-sensitive terrains. To address these issues, we propose a task-targeted curriculum that adjusts difficulty separately for each obstacle type, together with a heading-aware distillation framework that pretrains heading prediction before action distillation. Our goal is to learn a policy that maps depth images and proprioceptive inputs to joint actions, enabling safer and more robust traversal of parkour terrains such as hurdles, gaps, alternating steps, and ramps.
 
 
-\section{literature review}
+\section{Literature Review}
 Recent learning-based legged locomotion methods directly map sensory observations to motor actions and have shown strong agility on complex terrains \cite{2021arXiv210704034K, Tsounis2019DeepGaitPA}. Extreme Parkour further shows that a two-phase teacher-student framework can learn highly dynamic parkour behaviors from depth images \cite{cheng2024extreme}. Yet two limitations remain relevant to parkour learning: globally applied curriculum learning may overlook obstacle-specific difficulty and hinder efficient training on harder terrains \cite{Smith-RSS-23}, while implicitly learned directional intent can reduce stability on heading-sensitive obstacles \cite{Margolis2021LearningTJ}. These observations motivate task-targeted curriculum design and more explicit heading-aware policy learning.
 
 
 
-\section{technical plan}
+\section{Technical Plan}
 
 \subsection{New Obstacle and Terrain}
 
-To further enhance the parkour capability of quadruped robots across more diverse terrains, we designed the following four new obstacles and terrains, including beam gap, staggered gap, slanted hurdle and parkour v2 (Figure \ref{fig:terrains}).
+To further enhance the parkour capability of quadruped robots across more diverse terrains, we designed four new obstacle types and terrains: beam gap, staggered gap, slanted hurdle, and parkour v2 (Figure \ref{fig:terrains}).
 
 \begin{figure}[h]
     \centering
@@ -132,7 +132,7 @@ We extend the original global terrain curriculum into a \textbf{task-targeted cu
 
 So far, our work has established a verified baseline training pipeline for extreme-parkour on remote GPU servers. We successfully launched base-policy training, ran it to 50 iterations, and confirmed checkpoint saving works correctly.
 
-\section{Expected outcome}
+\section{Expected Outcome}
 \setlength{\parindent}{2em}
 We expect the proposed framework to enable robust quadruped parkour across both standard and newly designed terrains. Specifically, we anticipate:
 
@@ -145,17 +145,17 @@ We expect the proposed framework to enable robust quadruped parkour across both 
 
 Overall, these results are expected to show that heading-aware distillation and task-specific curriculum learning improve the performance and robustness of learned parkour policies.
 
-\section{potential risks and backup plan}
+\section{Potential Risks and Backup Plan}
 \setlength{\parindent}{2em}
 
 The potential risks and corresponding backup plans for our project are as follows:
 
 \begin{itemize}
-    \item The model may have limited generalization on designed highly challenging terrains. As backup plan, we can relax the conditions for certain terrains.
-    \item The addition of the heading predictor may lead to slower inference speed and increased action latency. As backup plan, we can reduce the number of model parameters or optimize the inference pipeline to accelerate inference.
-    \item The low success rate on more demanding tasks may slow down the overall training progress. As backup plan, we can merge fine-grained tasks into a few coarser categories, or adopt larger sliding windows for statistics.
-    \item Limited computational power may lead to slower-than-expected training progress. As backup plan, we can optimize the training pipeline or reduce the parameter count.
-    \item Segmentation faults still occur in distillation and inference workflows, even though Ubuntu, Isaac Gym, and PyTorch versions appear compatible. As backup plan, we can decouple training and playback. 
+    \item The model may have limited generalization on highly challenging terrains we designed. As a backup plan, we can relax the conditions for certain terrains.
+    \item The addition of the heading predictor may lead to slower inference speed and increased action latency. As a backup plan, we can reduce the number of model parameters or optimize the inference pipeline.
+    \item The low success rate on more demanding tasks may slow down the overall training progress. As a backup plan, we can merge fine-grained tasks into a few coarser categories or adopt larger sliding windows for statistics.
+    \item Limited computational power may lead to slower-than-expected training progress. As a backup plan, we can optimize the training pipeline or reduce the parameter count.
+    \item Segmentation faults still occur in distillation and inference workflows, even though the Ubuntu, Isaac Gym, and PyTorch versions appear compatible. As a backup plan, we can decouple training and playback. 
     %continue training on the remote server to reliably produce checkpoints, then transfer checkpoints to a local Ubuntu machine and run play.py locally for rollout verification and visualization.
 \end{itemize}
 
@@ -170,7 +170,7 @@ The potential risks and corresponding backup plans for our project are as follow
 %For the segmentation fault, we will prioritize numerical evaluation without recording, isolate the crash with a minimal reproducible script, and, if unresolved, focus on the curriculum component while treating heading-aware distillation as an extension.
 
 
-\section{timeline}
+\section{Timeline}
 
 \setlength{\parindent}{2em}
 \begin{table}[H]
@@ -182,9 +182,9 @@ The potential risks and corresponding backup plans for our project are as follow
 \hline
 8 & Implement the baseline quadruped parkour policy in Isaac Gym; reproduce standard terrains and validate basic locomotion. \\
 \hline
-9-10 & Design and implement new obstacle types: alternating steps, bean gaps, biased gaps, and \textit{parkour v2} courses；apply task-targeted curriculum to improve convergence. \\
+9-10 & Design and implement new obstacle types: alternating steps, beam gaps, biased gaps, and \textit{parkour v2} courses; apply task-targeted curriculum to improve convergence. \\
 \hline
-11-12 &Pretrain heading predictor; verify heading predictions on complex terrains; freeze backbone if needed.  \\
+11-12 & Pretrain the heading predictor; verify heading predictions on complex terrains; freeze the backbone if needed.  \\
 \hline
 13 & Distill student policy with predicted heading and depth latent. \\
 \hline
