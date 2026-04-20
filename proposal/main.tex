@@ -8,6 +8,7 @@
 \usepackage{graphicx}
 \usepackage{float}
 \usepackage[bookmarks=true]{hyperref}
+\usepackage{booktabs}
 
 \pdfinfo{
    /Author (Homer Simpson)
@@ -175,21 +176,18 @@ The potential risks and corresponding backup plans for our project are as follow
 \setlength{\parindent}{2em}
 \begin{table}[H]
 \centering
-\caption{Project Timeline and Milestones}
-\begin{tabular}{|c|p{7cm}|}
-\hline
-\textbf{Week} & \textbf{Milestone / Task} \\
-\hline
+\caption{Project timeline and milestones.}
+\label{tab:timeline}
+\begin{tabular}{p{1.7cm}p{6.9cm}}
+\toprule
+\textbf{Week(s)} & \textbf{Milestone / Task} \\
+\midrule
 8 & Implement the baseline quadruped parkour policy in Isaac Gym; reproduce standard terrains and validate basic locomotion. \\
-\hline
-9-10 & Design and implement new obstacle types: alternating steps, beam gaps, biased gaps, and \textit{parkour v2} courses; apply task-targeted curriculum to improve convergence. \\
-\hline
-11-12 & Pretrain the heading predictor; verify heading predictions on complex terrains; freeze the backbone if needed.  \\
-\hline
-13 & Distill student policy with predicted heading and depth latent. \\
-\hline
-14-15 & Conduct ablation studies and full-policy evaluation on standard and newly designed terrains; collect metrics including success rate and heading accuracy; categorize typical failure cases; prepare final report and demo. \\
-\hline
+9--10 & Design and implement new obstacle types (alternating steps, beam gaps, biased gaps, and \textit{parkour v2} courses); apply task-targeted curriculum to improve convergence. \\
+11--12 & Pretrain the heading predictor; verify heading predictions on complex terrains; freeze the backbone if needed. \\
+13 & Distill the student policy with predicted heading and depth latent. \\
+14--15 & Conduct ablation studies and full-policy evaluation on standard and newly designed terrains; collect metrics including success rate and heading accuracy; categorize typical failure cases; prepare the final report and demo. \\
+\bottomrule
 \end{tabular}
 \end{table}
 \section*{Acknowledgments}
