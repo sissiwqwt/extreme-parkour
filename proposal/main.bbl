@@ -1,0 +1,37 @@
+\begin{thebibliography}{5}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Cheng et~al.(2024)Cheng, Shi, Agarwal, and Pathak]{cheng2024extreme}
+Xuxin Cheng, Kexin Shi, Ananye Agarwal, and Deepak Pathak.
+\newblock Extreme parkour with legged robots.
+\newblock In \emph{2024 IEEE International Conference on Robotics and Automation (ICRA)}, pages 11443--11450. IEEE, 2024.
+
+\bibitem[{Kumar} et~al.(2021){Kumar}, {Fu}, {Pathak}, and {Malik}]{2021arXiv210704034K}
+Ashish {Kumar}, Zipeng {Fu}, Deepak {Pathak}, and Jitendra {Malik}.
+\newblock {RMA: Rapid Motor Adaptation for Legged Robots}.
+\newblock \emph{arXiv e-prints}, art. arXiv:2107.04034, July 2021.
+\newblock \doi{10.48550/arXiv.2107.04034}.
+
+\bibitem[Tsounis et~al.(2019)Tsounis, Alge, Lee, Farshidian, and Hutter]{Tsounis2019DeepGaitPA}
+Vassilios Tsounis, Mitja Alge, Joonho Lee, Farbod Farshidian, and Marco Hutter.
+\newblock Deepgait: Planning and control of quadrupedal gaits using deep reinforcement learning.
+\newblock \emph{IEEE Robotics and Automation Letters}, 5:\penalty0 3699--3706, 2019.
+\newblock URL \url{https://api.semanticscholar.org/CorpusID:202660832}.
+
+\bibitem[Smith et~al.(2023)Smith, Kew, Li, Luu, Peng, Ha, Tan, and Levine]{Smith-RSS-23}
+Laura~M Smith, J.~Chase Kew, Tianyu Li, Linda Luu, Xue~Bin Peng, Sehoon Ha, Jie Tan, and Sergey Levine.
+\newblock {Learning and Adapting Agile Locomotion Skills by Transferring Experience}.
+\newblock In \emph{Proceedings of Robotics: Science and Systems}, Daegu, Republic of Korea, July 2023.
+\newblock \doi{10.15607/RSS.2023.XIX.051}.
+
+\bibitem[Margolis et~al.(2021)Margolis, Chen, Paigwar, Fu, Kim, Kim, and Agrawal]{Margolis2021LearningTJ}
+G.~Margolis, Tao Chen, Kartik Paigwar, Xiang Fu, Donghyun Kim, Sangbae Kim, and Pulkit Agrawal.
+\newblock Learning to jump from pixels.
+\newblock In \emph{Conference on Robot Learning}, 2021.
+\newblock URL \url{https://api.semanticscholar.org/CorpusID:237262919}.
+
+\end{thebibliography}
