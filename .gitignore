@@ -1,0 +1,6 @@
+isaacgym*
+.ipynb_checkpoints/
+.vscode/
+*img
+.codex
+*.mp4
