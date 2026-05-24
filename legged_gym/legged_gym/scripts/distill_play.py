@@ -19,8 +19,8 @@ sys.modules["gymtorch"] = None
 
 import argparse
 import os
+import re
 import sys
-from datetime import datetime
 
 import faulthandler
 
@@ -31,6 +31,12 @@ from isaacgym import gymapi
 
 from legged_gym.envs import *
 from legged_gym.utils import get_args, task_registry
+from legged_gym.utils.helpers import (
+    class_to_dict,
+    parse_sim_params,
+    set_seed,
+    update_cfg_from_args,
+)
 
 import numpy as np
 import torch
@@ -49,7 +55,7 @@ def _pop_script_argv():
         "--video_out",
         type=str,
         default=None,
-        help="Output video file path (.mp4 recommended). Default: headless_play_<timestamp>.mp4 in CWD.",
+        help="Output video file path (.mp4 recommended). Default: legged_gym/demos/<terrain>_distill_<ckpt>.mp4.",
     )
     p.add_argument(
         "--video_fps",
@@ -118,13 +124,67 @@ def _pop_script_argv():
 
 
 def get_load_path_jit(root, checkpoint=-1, model_name_include="model"):
+    model, _ = _get_model_and_checkpoint(root, checkpoint, model_name_include)
+    return model
+
+
+def _get_model_and_checkpoint(root, checkpoint=-1, model_name_include="model"):
     if checkpoint == -1:
         models = [file for file in os.listdir(root) if model_name_include in file]
         models.sort(key=lambda m: "{0:0>15}".format(m))
         model = models[-1]
     else:
         model = "model_{}.pt".format(checkpoint)
-    return model
+    return model, _checkpoint_from_model_name(model, checkpoint)
+
+
+def _checkpoint_from_model_name(model, fallback):
+    match = re.search(r"model_(\d+)\.pt$", model)
+    if match is not None:
+        return match.group(1)
+    if fallback != -1:
+        return str(fallback)
+    match = re.search(r"(\d+)", model)
+    if match is not None:
+        return match.group(1)
+    return "latest"
+
+
+def _active_terrain_name(terrain_dict):
+    active = [(name, weight) for name, weight in terrain_dict.items() if weight > 0]
+    if not active:
+        return "terrain"
+    return max(active, key=lambda item: item[1])[0]
+
+
+def _safe_filename_part(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "terrain"
+
+
+def _default_video_path(env_cfg, checkpoint):
+    terrain = _safe_filename_part(_active_terrain_name(env_cfg.terrain.terrain_dict))
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    demos_dir = os.path.abspath(os.path.join(script_dir, "..", "demos"))
+    return os.path.join(demos_dir, f"{terrain}_distill_{checkpoint}.mp4")
+
+
+def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict):
+    task_class = task_registry.get_task_class(name)
+    env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
+    env_cfg.terrain.terrain_dict = dict(terrain_dict)
+    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    set_seed(env_cfg.seed)
+
+    sim_params = {"sim": class_to_dict(env_cfg.sim)}
+    sim_params = parse_sim_params(args, sim_params)
+    env = task_class(
+        cfg=env_cfg,
+        sim_params=sim_params,
+        physics_engine=args.physics_engine,
+        sim_device=args.sim_device,
+        headless=args.headless,
+    )
+    return env, env_cfg
 
 
 def _rgba_to_bgr(rgba):
@@ -261,13 +321,14 @@ def play_headless_record(args, rec_cfg):
         "platform": 0.0,
         "large stairs up": 0.0,
         "large stairs down": 0.0,
-        "parkour": 0.2,
-        "parkour_hurdle": 0.2,
+        "parkour": 0.0,
+        "parkour_hurdle": 0.0,
         "parkour_flat": 0.0,
-        "parkour_step": 0.2,
-        "parkour_gap": 0.2,
-        "demo": 0.2,
+        "parkour_step": 1.0,
+        "parkour_gap": 0.0,
+        "demo": 0.0,
     }
+    terrain_dict = dict(env_cfg.terrain.terrain_dict)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
     env_cfg.terrain.max_difficulty = True
@@ -296,7 +357,12 @@ def play_headless_record(args, rec_cfg):
 
     _patch_sim_params(env_cfg, rec_cfg.use_gpu)
 
-    env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+    env, env_cfg = _make_env_with_terrain_override(
+        name=args.task,
+        args=args,
+        env_cfg=env_cfg,
+        terrain_dict=terrain_dict,
+    )
     obs = env.get_observations()
 
     if not env.cfg.depth.use_camera or not env.cam_handles:
@@ -334,11 +400,16 @@ def play_headless_record(args, rec_cfg):
 
     if args.use_jit:
         path = os.path.join(log_pth, "traced")
-        model = get_load_path_jit(root=path, checkpoint=args.checkpoint)
+        model, checkpoint = _get_model_and_checkpoint(
+            root=path, checkpoint=args.checkpoint
+        )
         path = os.path.join(path, model)
         print("Loading jit for policy: ", path)
         policy_jit = torch.jit.load(path, map_location=env.device)
     else:
+        _, checkpoint = _get_model_and_checkpoint(
+            root=log_pth, checkpoint=args.checkpoint
+        )
         policy = ppo_runner.get_inference_policy(device=env.device)
     _estimator = ppo_runner.get_estimator_inference_policy(device=env.device)
     if env.cfg.depth.use_camera:
@@ -357,9 +428,7 @@ def play_headless_record(args, rec_cfg):
 
     video_path = rec_cfg.video_out
     if video_path is None:
-        video_path = os.path.abspath(
-            f"headless_play_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        )
+        video_path = _default_video_path(env_cfg, checkpoint)
     os.makedirs(os.path.dirname(video_path) or ".", exist_ok=True)
 
     fps = (
