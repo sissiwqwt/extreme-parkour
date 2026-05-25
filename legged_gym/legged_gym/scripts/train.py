@@ -30,7 +30,17 @@
 
 import numpy as np
 import os
+import sys
 from datetime import datetime
+
+LOCAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+for path in (
+    os.path.join(LOCAL_ROOT, "isaacgym", "python"),
+    os.path.join(LOCAL_ROOT, "legged_gym"),
+    os.path.join(LOCAL_ROOT, "rsl_rl"),
+):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 import isaacgym
 from legged_gym.envs import *

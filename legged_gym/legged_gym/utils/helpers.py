@@ -76,6 +76,16 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in ("true", "1", "yes", "y"):
+        return True
+    if value in ("false", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Expected a boolean value.")
+
 def parse_sim_params(args, cfg):
     # code from Isaac Gym Preview 2
     # initialize sim params
@@ -152,6 +162,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.terrain.num_rows = args.rows
         if args.cols is not None:
             env_cfg.terrain.num_cols = args.cols
+        if args.curriculum is not None:
+            env_cfg.terrain.curriculum = args.curriculum
         if args.delay:
             env_cfg.domain_rand.action_delay = args.delay
         if not args.delay and not args.resume and not args.use_camera and args.headless: # if train from scratch
@@ -219,7 +231,8 @@ def get_args():
         {"name": "--hitid", "type": str, "default": None, "help": "exptid fot hitting policy"},
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
-        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"}
+        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
+        {"name": "--curriculum", "type": parse_bool, "default": None, "help": "Enable or disable terrain curriculum. Example: --curriculum False"}
 
 
     ]
