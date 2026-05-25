@@ -204,19 +204,20 @@ class OnPolicyRunner:
             learn_time = stop - start
             if self.log_dir is not None:
                 self.log(locals())
-            if it < 2500:
+            if self.log_dir is not None and it < 2500:
                 if it % self.save_interval == 0:
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            elif it < 5000:
+            elif self.log_dir is not None and it < 5000:
                 if it % (2*self.save_interval) == 0:
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            else:
+            elif self.log_dir is not None:
                 if it % (5*self.save_interval) == 0:
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
         # self.current_learning_iteration += num_learning_iterations
-        self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
+        if self.log_dir is not None:
+            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def learn_vision(self, num_learning_iterations, init_at_random_ep_len=False):
         tot_iter = self.current_learning_iteration + num_learning_iterations
@@ -493,6 +494,8 @@ class OnPolicyRunner:
         if self.if_depth:
             state_dict['depth_encoder_state_dict'] = self.alg.depth_encoder.state_dict()
             state_dict['depth_actor_state_dict'] = self.alg.depth_actor.state_dict()
+        if hasattr(self.env, "get_terrain_curriculum_state"):
+            state_dict['terrain_curriculum_state'] = self.env.get_terrain_curriculum_state()
         torch.save(state_dict, path)
 
     def load(self, path, load_optimizer=True):
@@ -515,6 +518,8 @@ class OnPolicyRunner:
                 self.alg.depth_actor.load_state_dict(self.alg.actor_critic.actor.state_dict())
         if load_optimizer:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
+        if 'terrain_curriculum_state' in loaded_dict and hasattr(self.env, "load_terrain_curriculum_state"):
+            self.env.load_terrain_curriculum_state(loaded_dict['terrain_curriculum_state'])
         # self.current_learning_iteration = loaded_dict['iter']
         print("*" * 80)
         return loaded_dict['infos']

@@ -319,8 +319,89 @@ class Terrain:
             self.add_roughness(terrain)
         elif choice < self.proportions[19]:
             idx = 20
+            alternating_step_terrain(terrain,
+                                     platform_len=2.5,
+                                     platform_height=0.0,
+                                     num_steps=self.num_goals - 2,
+                                     x_range=[0.35, 0.8],
+                                     y_range=[-0.2, 0.2],
+                                     half_valid_width=[0.45, 0.7],
+                                     step_height=0.1 + 0.2*difficulty,
+                                     pad_width=0.1,
+                                     pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[20]:
+            idx = 21
+            beam_gap_terrain(terrain,
+                             platform_len=2.5,
+                             platform_height=0.0,
+                             num_gaps=self.num_goals - 2,
+                             gap_size=0.2 + 0.2*difficulty,
+                             x_range=[1.0, 1.8],
+                             beam_width_range=[0.4, 0.8],
+                             y_offset_range=[-0.3, 0.3],
+                             gap_depth=[0.2, 1.0],
+                             pad_width=0.1,
+                             pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[21]:
+            idx = 22
+            biased_gap_terrain(terrain,
+                                   platform_len=2.5,
+                                   platform_height=0.0,
+                                   num_gaps=self.num_goals - 2,
+                                   gap_size=0.25 + 0.15*difficulty,
+                                   x_range=[1.0, 1.6],
+                                   corridor_half_width=0.6,
+                                   lateral_offset=0.8,
+                                   gap_depth=[0.2, 1.0],
+                                   pad_width=0.1,
+                                   pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[22]:
+            idx = 23
+            parkour_v2_terrain(terrain,
+                               platform_len=2.5,
+                               platform_height=0.0,
+                               num_segments=min(int(5 + 3*difficulty), 10),
+                               segment_x_range=[1.5, 2.8],
+                               num_goals=self.num_goals,
+                               pad_width=0.1,
+                               pad_height=0.5)
+            # parkour_v2_terrain already handles terrain setup, no need to add_roughness separately
+        elif choice < self.proportions[23]:
+            idx = 24
+            alternating_lateral_terrain(terrain,
+                                        platform_len=2.5,
+                                        platform_height=0.0,
+                                        num_segments=self.num_goals - 2,
+                                        x_range=[0.8, 1.4],
+                                        corridor_half_width=[0.45, 0.7],
+                                        lateral_offset=0.6,
+                                        wall_height=0.18 + 0.12 * difficulty,
+                                        pad_width=0.1,
+                                        pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[24]:
+            idx = 25
+            cliff_side_terrain(terrain,
+                               platform_len=2.5,
+                               platform_height=0.0,
+                               num_segments=self.num_goals - 2,
+                               x_range=[0.8, 1.4],
+                               corridor_width_range=[1.0, 1.5],
+                               cliff_depth=[0.2, 0.6 + 0.4 * difficulty],
+                               add_obstacles=True,
+                               pad_width=0.1,
+                               pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[25]:
+            idx = 26
             demo_terrain(terrain)
             self.add_roughness(terrain)
+        else:
+            idx = 0
+            terrain_utils.pyramid_sloped_terrain(terrain, slope=0.0, platform_size=3.)
         # np.set_printoptions(precision=2)
         # print(np.array(self.proportions), choice)
         terrain.idx = idx
@@ -701,6 +782,665 @@ def parkour_step_terrain(terrain,
     terrain.height_field_raw[:, -pad_width:] = pad_height
     terrain.height_field_raw[:pad_width, :] = pad_height
     terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+# new terrain
+
+def slanted_hurdle_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_stones=8,
+        x_range=[1.2, 2.0],
+        y_range=[-0.3, 0.3],
+        half_valid_width=[0.45, 0.8],
+        hurdle_height_range=[0.12, 0.28],
+        hurdle_depth_range=[0.35, 0.7],
+        pad_width=0.1,
+        pad_height=0.5,
+        flat=False):
+    """
+    斜顶矮墙：
+    与 parkour_hurdle_terrain 类似，但障碍不是竖直薄墙，而是沿 x 方向渐变高度的斜顶障碍。
+    """
+    goals = np.zeros((num_stones + 2, 2))
+    mid_y = terrain.length // 2
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale)
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale)
+    dis_y_min = round(y_range[0] / terrain.horizontal_scale)
+    dis_y_max = round(y_range[1] / terrain.horizontal_scale)
+
+    half_valid_width = round(np.random.uniform(half_valid_width[0], half_valid_width[1]) / terrain.horizontal_scale)
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    dis_x = platform_len
+    goals[0] = [platform_len - 1, mid_y]
+
+    for i in range(num_stones):
+        rand_x = np.random.randint(dis_x_min, dis_x_max)
+        rand_y = np.random.randint(dis_y_min, dis_y_max)
+        dis_x += rand_x
+
+        hurdle_depth = round(np.random.uniform(hurdle_depth_range[0], hurdle_depth_range[1]) / terrain.horizontal_scale)
+        hurdle_height = round(np.random.uniform(hurdle_height_range[0], hurdle_height_range[1]) / terrain.vertical_scale)
+
+        start_x = max(dis_x - hurdle_depth // 2, 0)
+        end_x = min(dis_x + hurdle_depth // 2, terrain.width)
+
+        if not flat and end_x > start_x:
+            heights = np.linspace(0, hurdle_height, end_x - start_x).astype(np.int16)
+            terrain.height_field_raw[start_x:end_x, :] = heights[:, None]
+
+            center_y = mid_y + rand_y
+            terrain.height_field_raw[start_x:end_x, :max(center_y - half_valid_width, 0)] = 0
+            terrain.height_field_raw[start_x:end_x, min(center_y + half_valid_width, terrain.length):] = 0
+
+        goals[i + 1] = [dis_x, mid_y + rand_y]
+
+    final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
+    if final_dis_x > terrain.width:
+        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+    goals[-1] = [final_dis_x, mid_y]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = pad_height
+    terrain.height_field_raw[:, -pad_width:] = pad_height
+    terrain.height_field_raw[:pad_width, :] = pad_height
+    terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+def alternating_step_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_steps=8,
+        x_range=[0.35, 0.8],
+        y_range=[-0.2, 0.2],
+        half_valid_width=[0.45, 0.7],
+        step_height=0.12,
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    锯齿台阶：
+    多个连续台阶，高度上下交替变化（+h, -h, +h, -h...），
+    横向通道中心也可轻微漂移。
+    """
+    goals = np.zeros((num_steps + 2, 2))
+    mid_y = terrain.length // 2
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale)
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale)
+    dis_y_min = round(y_range[0] / terrain.horizontal_scale)
+    dis_y_max = round(y_range[1] / terrain.horizontal_scale)
+    half_valid_width = round(np.random.uniform(half_valid_width[0], half_valid_width[1]) / terrain.horizontal_scale)
+
+    step_height = round(step_height / terrain.vertical_scale)
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    dis_x = platform_len
+    last_dis_x = dis_x
+    goals[0] = [platform_len - 1, mid_y]
+
+    for i in range(num_steps):
+        rand_x = np.random.randint(dis_x_min, dis_x_max)
+        rand_y = np.random.randint(dis_y_min, dis_y_max)
+
+        sign = 1 if i % 2 == 0 else -1
+        cur_h = sign * step_height
+
+        terrain.height_field_raw[dis_x:dis_x + rand_x, :] = cur_h
+        dis_x += rand_x
+
+        center_y = mid_y + rand_y
+        terrain.height_field_raw[last_dis_x:dis_x, :max(center_y - half_valid_width, 0)] = 0
+        terrain.height_field_raw[last_dis_x:dis_x, min(center_y + half_valid_width, terrain.length):] = 0
+
+        goals[i + 1] = [dis_x - rand_x // 2, center_y]
+        last_dis_x = dis_x
+
+    final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
+    if final_dis_x > terrain.width:
+        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+    goals[-1] = [final_dis_x, mid_y]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = pad_height
+    terrain.height_field_raw[:, -pad_width:] = pad_height
+    terrain.height_field_raw[:pad_width, :] = pad_height
+    terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+def beam_gap_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_gaps=8,
+        gap_size=0.28,
+        x_range=[1.0, 1.6],
+        beam_width_range=[0.5, 0.8],
+        y_offset_range=[-0.3, 0.3],
+        gap_depth=[0.2, 1.0],
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    窄梁缺口：
+    大部分区域为深坑，只保留一条窄梁；沿窄梁连续挖多个 gap。
+    """
+    goals = np.zeros((num_gaps + 2, 2))
+    mid_y = terrain.length // 2
+
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+    gap_size = round(gap_size / terrain.horizontal_scale)
+    gap_depth = -round(np.random.uniform(gap_depth[0], gap_depth[1]) / terrain.vertical_scale)
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale) + gap_size
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale) + gap_size
+    beam_half_width = round(np.random.uniform(beam_width_range[0], beam_width_range[1]) / terrain.horizontal_scale / 2)
+
+    terrain.height_field_raw[:, :] = gap_depth
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+    terrain.height_field_raw[0:platform_len, mid_y - beam_half_width:mid_y + beam_half_width] = platform_height
+
+    dis_x = platform_len
+    goals[0] = [platform_len - 1, mid_y]
+
+    for i in range(num_gaps):
+        rand_x = np.random.randint(dis_x_min, dis_x_max)
+        rand_y = round(np.random.uniform(y_offset_range[0], y_offset_range[1]) / terrain.horizontal_scale)
+        dis_x += rand_x
+
+        beam_center = np.clip(mid_y + rand_y, beam_half_width + 1, terrain.length - beam_half_width - 1)
+
+        last_safe_x = max(dis_x - rand_x, 0)
+        terrain.height_field_raw[last_safe_x:dis_x, beam_center - beam_half_width:beam_center + beam_half_width] = platform_height
+
+        gap_start = max(dis_x - gap_size // 2, 0)
+        gap_end = min(dis_x + gap_size // 2, terrain.width)
+        terrain.height_field_raw[gap_start:gap_end, beam_center - beam_half_width:beam_center + beam_half_width] = gap_depth
+
+        goals[i + 1] = [dis_x - rand_x // 2, beam_center]
+
+    final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
+    if final_dis_x > terrain.width:
+        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+
+    terrain.height_field_raw[dis_x:final_dis_x, mid_y - beam_half_width:mid_y + beam_half_width] = platform_height
+    goals[-1] = [final_dis_x, mid_y]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = pad_height
+    terrain.height_field_raw[:, -pad_width:] = pad_height
+    terrain.height_field_raw[:pad_width, :] = pad_height
+    terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+def biased_gap_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_gaps=8,
+        gap_size=0.3,
+        x_range=[1.0, 1.6],
+        corridor_half_width=0.6,
+        lateral_offset=0.8,
+        gap_depth=[0.2, 1.0],
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    完全错开缺口平台：
+    相邻两个平台完全左右错开（交替偏移），goal点放在相邻平台可通行区域之间的最近处。
+    """
+    goals = np.zeros((num_gaps + 2, 2))
+    mid_y = terrain.length // 2
+
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+    gap_size = round(gap_size / terrain.horizontal_scale)
+    gap_depth = -round(np.random.uniform(gap_depth[0], gap_depth[1]) / terrain.vertical_scale)
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale)
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale)
+    corridor_half_width = round(corridor_half_width / terrain.horizontal_scale)
+    lateral_offset = round(lateral_offset / terrain.horizontal_scale)
+
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    dis_x = platform_len
+    last_dis_x = dis_x
+    goals[0] = [platform_len - 1, mid_y]
+
+    for i in range(num_gaps):
+        rand_x = np.random.randint(dis_x_min, dis_x_max)
+        dis_x += rand_x
+
+        # 相邻平台完全交替错开：左-右-左-右...
+        sign = 1 if i % 2 == 0 else -1
+        center_y = int(round(np.clip(
+            mid_y + sign * lateral_offset * random.random() * 0.2,
+            corridor_half_width + 1,
+            terrain.length - corridor_half_width - 1,
+        )))
+        corridor_start = max(center_y - corridor_half_width, 0)
+        corridor_end = min(center_y + corridor_half_width, terrain.length)
+
+        # 当前平台：设置缺口为除去可通行区域外的部分
+        terrain.height_field_raw[last_dis_x:dis_x, :corridor_start] = gap_depth
+        terrain.height_field_raw[last_dis_x:dis_x, corridor_end:] = gap_depth
+
+        goals[i + 1] = [(last_dis_x + dis_x) / 2, center_y]
+
+        # 平台端缺口：使机器狗必须精确跳跃
+        gap_start = max(dis_x - gap_size // 2, 0)
+        gap_end = min(dis_x + gap_size // 2, terrain.width)
+        terrain.height_field_raw[gap_start:gap_end, :] = gap_depth
+
+        last_dis_x = dis_x
+
+    final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
+    if final_dis_x > terrain.width:
+        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+    goals[-1] = [final_dis_x, mid_y]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = pad_height
+    terrain.height_field_raw[:, -pad_width:] = pad_height
+    terrain.height_field_raw[:pad_width, :] = pad_height
+    terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+def alternating_lateral_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_segments=8,
+        x_range=[0.8, 1.4],
+        corridor_half_width=[0.5, 0.8],
+        lateral_offset=0.6,
+        wall_height=0.25,
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    交替侧跳赛道：
+    每一段只留一个可通行走廊，并强制走廊左右交替偏移。
+    可理解为“S型/左右摆动可行通道”的离散版本。
+    """
+    goals = np.zeros((num_segments + 2, 2))
+    mid_y = terrain.length // 2
+
+    terrain.height_field_raw[:, :] = 0
+
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale)
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale)
+    corridor_half_width = round(np.random.uniform(corridor_half_width[0], corridor_half_width[1]) / terrain.horizontal_scale)
+    lateral_offset = round(lateral_offset / terrain.horizontal_scale)
+    wall_height = round(wall_height / terrain.vertical_scale)
+
+    dis_x = platform_len
+    last_dis_x = dis_x
+    goals[0] = [platform_len - 1, mid_y]
+
+    for i in range(num_segments):
+        rand_x = np.random.randint(dis_x_min, dis_x_max)
+        sign = 1 if i % 2 == 0 else -1
+        center_y = int(round(np.clip(
+            mid_y + sign * lateral_offset,
+            corridor_half_width + 1,
+            terrain.length - corridor_half_width - 1,
+        )))
+
+        terrain.height_field_raw[last_dis_x:last_dis_x + rand_x, :] = wall_height
+        terrain.height_field_raw[last_dis_x:last_dis_x + rand_x,
+                                 center_y - corridor_half_width:center_y + corridor_half_width] = 0
+
+        dis_x += rand_x
+        goals[i + 1] = [last_dis_x + rand_x // 2, center_y]
+        last_dis_x = dis_x
+
+    final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
+    if final_dis_x > terrain.width:
+        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+    goals[-1] = [final_dis_x, mid_y]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = pad_height
+    terrain.height_field_raw[:, -pad_width:] = pad_height
+    terrain.height_field_raw[:pad_width, :] = pad_height
+    terrain.height_field_raw[-pad_width:, :] = pad_height
+
+
+def cliff_side_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_segments=8,
+        x_range=[0.8, 1.4],
+        corridor_width_range=[1.0, 1.5],
+        cliff_depth=[0.3, 1.0],
+        cliff_side=None,
+        add_obstacles=True,
+        obstacle_height_range=[0.08, 0.18],
+        obstacle_depth_range=[0.18, 0.35],
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    单侧悬崖赛道：
+    一侧持续为悬崖，另一侧为可行走走廊；走廊上可加一些低矮小障碍。
+    """
+    goals = np.zeros((num_segments + 2, 2))
+    mid_y = terrain.length // 2
+
+    platform_len = round(platform_len / terrain.horizontal_scale)
+    platform_height = round(platform_height / terrain.vertical_scale)
+    cliff_depth = -round(np.random.uniform(cliff_depth[0], cliff_depth[1]) / terrain.vertical_scale)
+
+    dis_x_min = round(x_range[0] / terrain.horizontal_scale)
+    dis_x_max = round(x_range[1] / terrain.horizontal_scale)
+
+    corridor_width = round(np.random.uniform(corridor_width_range[0], corridor_width_range[1]) / terrain.horizontal_scale)
+    obstacle_h_min = round(obstacle_height_range[0] / terrain.vertical_scale)
+    obstacle_h_max = round(obstacle_height_range[1] / terrain.vertical_scale)
+    obstacle_d_min = round(obstacle_depth_range[0] / terrain.horizontal_scale)
+    obstacle_d_max = round(obstacle_depth_range[1] / terrain.horizontal_scale)
+
+    if cliff_side is None:
+        cliff_side = "left" if np.random.rand() < 0.5 else "right"
+
+    terrain.height_field_raw[:, :] = 0
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    if cliff_side == "left":
+        corridor_start = terrain.length - corridor_width
+        corridor_end = terrain.length
+        terrain.height_field_raw[:, :corridor_start] = cliff_depth
+        corridor_center = (corridor_start + corridor_end) // 2
+    else:
+        corridor_start = 0
+        corridor_end = corridor_width
+        terrain.height_field_raw[:, corridor_end:] = cliff_depth
+        corridor_center = (corridor_start + corridor_end) // 2
+
+    dis_x = platform_len
+    goals[0] = [platform_len - 1, corridor_center]
+
+    for i in range(num_segments):
+        seg_len = np.random.randint(dis_x_min, dis_x_max)
+        start_x = dis_x
+        end_x = min(dis_x + seg_len, terrain.width)
+
+        if add_obstacles:
+            obs_depth = np.random.randint(obstacle_d_min, obstacle_d_max + 1)
+            obs_height = np.random.randint(obstacle_h_min, obstacle_h_max + 1)
+            obs_x = min(start_x + seg_len // 2, terrain.width - 1)
+
+            if cliff_side == "left":
+                safe_margin = max(corridor_start + round(0.15 / terrain.horizontal_scale), 0)
+                obs_y0 = safe_margin
+                obs_y1 = min(corridor_end - round(0.2 / terrain.horizontal_scale), terrain.length)
+            else:
+                obs_y0 = max(corridor_start + round(0.2 / terrain.horizontal_scale), 0)
+                obs_y1 = max(corridor_end - round(0.15 / terrain.horizontal_scale), obs_y0 + 1)
+
+            terrain.height_field_raw[max(obs_x - obs_depth // 2, 0):min(obs_x + obs_depth // 2, terrain.width),
+                                     obs_y0:obs_y1] = obs_height
+
+        goals[i + 1] = [start_x + (end_x - start_x) // 2, corridor_center]
+        dis_x = end_x
+
+    final_dis_x = min(dis_x + np.random.randint(dis_x_min, dis_x_max), terrain.width - round(0.5 / terrain.horizontal_scale))
+    goals[-1] = [final_dis_x, corridor_center]
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = max(terrain.height_field_raw[:, :pad_width].max(), pad_height)
+    terrain.height_field_raw[:, -pad_width:] = max(terrain.height_field_raw[:, -pad_width:].max(), pad_height)
+    terrain.height_field_raw[:pad_width, :] = max(terrain.height_field_raw[:pad_width, :].max(), pad_height)
+    terrain.height_field_raw[-pad_width:, :] = max(terrain.height_field_raw[-pad_width:, :].max(), pad_height)
+
+
+def parkour_v2_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_segments=6,
+        segment_x_range=[1.5, 2.8],
+        num_goals=8,
+        pad_width=0.1,
+        pad_height=0.5):
+    """
+    parkour_v2:
+    终极混合赛道。将多种障碍片段随机组合：
+      - slanted_hurdle
+      - alternating_step
+      - beam_gap
+      - biased_gap
+
+    注意：
+    这里采用“在同一个高度图上按段拼接”的写法，而不是递归调用别的 terrain 函数，
+    避免这些函数各自把整张图重置掉。
+    """
+    terrain.height_field_raw[:, :] = 0
+
+    mid_y = terrain.length // 2
+    platform_len_px = round(platform_len / terrain.horizontal_scale)
+    platform_height_px = round(platform_height / terrain.vertical_scale)
+    terrain.height_field_raw[0:platform_len_px, :] = platform_height_px
+
+    goals = [[platform_len_px - 1, mid_y]]
+    cur_x = platform_len_px
+
+    gap_depth = -round(np.random.uniform(0.25, 1.0) / terrain.vertical_scale)
+
+    for seg_id in range(num_segments):
+        seg_len = round(np.random.uniform(segment_x_range[0], segment_x_range[1]) / terrain.horizontal_scale)
+        if cur_x + seg_len >= terrain.width - round(1.0 / terrain.horizontal_scale):
+            break
+
+        seg_type = np.random.choice(["slanted_hurdle", "alternating_step", "beam_gap", "biased_gap"])
+
+        start_x = cur_x
+        end_x = min(cur_x + seg_len, terrain.width)
+
+        if seg_type == "slanted_hurdle":
+            # 随机障碍数量（1-3个）
+            num_hurdles = np.random.randint(1, 4)
+            center_y = mid_y + np.random.randint(
+                round(-0.35 / terrain.horizontal_scale),
+                round(0.35 / terrain.horizontal_scale) + 1
+            )
+            half_valid_width = round(np.random.uniform(0.5, 0.8) / terrain.horizontal_scale)
+            
+            # 在segment内分布多个障碍
+            dis_x = start_x
+            hurdle_spacing_min = round(0.4 / terrain.horizontal_scale)
+            hurdle_spacing_max = round(0.8 / terrain.horizontal_scale)
+            
+            for hurdle_idx in range(num_hurdles):
+                if dis_x >= end_x - round(0.5 / terrain.horizontal_scale):
+                    break
+                    
+                # 每个障碍之间的随机间距
+                if hurdle_idx > 0:
+                    spacing = np.random.randint(hurdle_spacing_min, hurdle_spacing_max + 1)
+                    dis_x += spacing
+                
+                if dis_x >= end_x:
+                    break
+                
+                hurdle_depth = max(round(np.random.uniform(0.35, 0.7) / terrain.horizontal_scale), 2)
+                hurdle_height = round(np.random.uniform(0.12, 0.25) / terrain.vertical_scale)
+                
+                obs_x0 = max(dis_x - hurdle_depth // 2, start_x)
+                obs_x1 = min(dis_x + hurdle_depth // 2, end_x)
+                
+                if obs_x1 > obs_x0:
+                    heights = np.linspace(0, hurdle_height, max(obs_x1 - obs_x0, 1)).astype(np.int16)
+                    terrain.height_field_raw[obs_x0:obs_x1, :] = heights[:, None]
+                    terrain.height_field_raw[obs_x0:obs_x1, :max(center_y - half_valid_width, 0)] = 0
+                    terrain.height_field_raw[obs_x0:obs_x1, min(center_y + half_valid_width, terrain.length):] = 0
+                    
+                    goals.append([dis_x, center_y])
+
+        elif seg_type == "alternating_step":
+            center_y = mid_y + np.random.randint(
+                round(-0.25 / terrain.horizontal_scale),
+                round(0.25 / terrain.horizontal_scale) + 1
+            )
+            half_valid_width = round(np.random.uniform(0.45, 0.7) / terrain.horizontal_scale)
+            num_local = np.random.randint(2, 5)
+            local_w = max(seg_len // num_local, 1)
+            step_h = round(np.random.uniform(0.08, 0.16) / terrain.vertical_scale)
+
+            for k in range(num_local):
+                sx0 = start_x + k * local_w
+                sx1 = min(start_x + (k + 1) * local_w, end_x)
+                sign = 1 if k % 2 == 0 else -1
+                terrain.height_field_raw[sx0:sx1, :] = sign * step_h
+                terrain.height_field_raw[sx0:sx1, :max(center_y - half_valid_width, 0)] = 0
+                terrain.height_field_raw[sx0:sx1, min(center_y + half_valid_width, terrain.length):] = 0
+
+            goals.append([start_x + 2, center_y])
+            goals.append([start_x + seg_len // 2, center_y])
+            goals.append([start_x + seg_len - 3, center_y])
+
+        elif seg_type == "beam_gap":
+            beam_center = mid_y + np.random.randint(
+                round(-0.3 / terrain.horizontal_scale),
+                round(0.3 / terrain.horizontal_scale) + 1
+            )
+            beam_half_width = round(np.random.uniform(0.25, 0.4) / terrain.horizontal_scale)
+            terrain.height_field_raw[start_x:end_x, :] = gap_depth
+            terrain.height_field_raw[start_x:end_x,
+                                     beam_center - beam_half_width:beam_center + beam_half_width] = 0
+
+            num_local = np.random.randint(1, 3)
+            for _ in range(num_local):
+                gap_w = round(np.random.uniform(0.2, 0.35) / terrain.horizontal_scale)
+                gx = np.random.randint(start_x + gap_w, end_x - gap_w) if end_x - start_x > 2 * gap_w else start_x + (end_x - start_x) // 2
+                terrain.height_field_raw[max(gx - gap_w // 2, start_x):min(gx + gap_w // 2, end_x),
+                                         beam_center - beam_half_width:beam_center + beam_half_width] = gap_depth
+
+            goals.append([start_x + 2, beam_center])
+            goals.append([start_x + seg_len // 2, beam_center])
+            goals.append([start_x + seg_len - 3, beam_center])
+
+        elif seg_type == "biased_gap":
+            # 在一个segment内放置3个相邻的小平台，左右交替错开
+            num_platforms = 3
+            platform_size = seg_len // num_platforms
+            corridor_half_width = round(0.6 / terrain.horizontal_scale)
+            lateral_offset = round(0.8 / terrain.horizontal_scale)
+            
+            # 第一个平台的开始处goal
+            goals.append([start_x, mid_y])
+            
+            last_x = start_x
+            for plat_id in range(num_platforms):
+                # 每个平台的位置
+                plat_start = start_x + plat_id * platform_size
+                plat_end = min(start_x + (plat_id + 1) * platform_size, end_x)
+                
+                # 交替的左右偏移
+                sign = 1 if plat_id % 2 == 0 else -1
+                center_y = int(round(np.clip(
+                    mid_y + sign * lateral_offset,
+                    corridor_half_width + 1,
+                    terrain.length - corridor_half_width - 1,
+                )))
+                
+                # 设置该小平台的可通行区域（中心），两侧为缺口
+                terrain.height_field_raw[plat_start:plat_end, :max(center_y - corridor_half_width, 0)] = gap_depth
+                terrain.height_field_raw[plat_start:plat_end, min(center_y + corridor_half_width, terrain.length):] = gap_depth
+                
+                # 平台端缺口（仅在两侧可通行区域外）
+                gap_w = round(np.random.uniform(0.15, 0.25) / terrain.horizontal_scale)
+                if plat_id < num_platforms - 1:
+                    gap_x = plat_end - gap_w // 2
+                    gap_x0 = max(gap_x - gap_w // 2, plat_start)
+                    gap_x1 = min(gap_x + gap_w // 2, plat_end)
+                    terrain.height_field_raw[gap_x0:gap_x1, :max(center_y - corridor_half_width, 0)] = gap_depth
+                    terrain.height_field_raw[gap_x0:gap_x1, min(center_y + corridor_half_width, terrain.length):] = gap_depth
+                    
+                    # 相邻平台间的中点goal
+                    next_sign = -sign
+                    next_center_y = int(round(np.clip(
+                        mid_y + next_sign * lateral_offset,
+                        corridor_half_width + 1,
+                        terrain.length - corridor_half_width - 1,
+                    )))
+                    goal_y = int((center_y + next_center_y) // 2)
+                    goals.append([plat_end, goal_y])
+                else:
+                    # 最后一个平台的末尾goal
+                    goals.append([plat_end, center_y])
+
+        cur_x = end_x
+        
+        # 在障碍段之后添加过渡平台
+        if seg_id < num_segments - 1:
+            transition_len = round(np.random.uniform(1.0, 1.5) / terrain.horizontal_scale)
+            transition_start = cur_x
+            transition_end = min(cur_x + transition_len, terrain.width - round(1.0 / terrain.horizontal_scale))
+            
+            # 创建安全的平台
+            terrain.height_field_raw[transition_start:transition_end, :] = platform_height_px
+            
+            # 在过渡平台中心添加goal点
+            transition_mid = transition_start + (transition_end - transition_start) // 2
+            goals.append([transition_mid, mid_y])
+            
+            cur_x = transition_end
+
+    final_x = min(cur_x + round(1.0 / terrain.horizontal_scale), terrain.width - round(0.5 / terrain.horizontal_scale))
+    goals.append([final_x, mid_y])
+
+    goals = np.array(goals)
+    if len(goals) > num_goals:
+        keep_ids = np.round(np.linspace(0, len(goals) - 1, num_goals)).astype(int)
+        goals = goals[keep_ids]
+    elif len(goals) < num_goals:
+        goals = np.concatenate([goals, np.repeat(goals[-1][None, :], num_goals - len(goals), axis=0)], axis=0)
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = np.maximum(terrain.height_field_raw[:, :pad_width], pad_height)
+    terrain.height_field_raw[:, -pad_width:] = np.maximum(terrain.height_field_raw[:, -pad_width:], pad_height)
+    terrain.height_field_raw[:pad_width, :] = np.maximum(terrain.height_field_raw[:pad_width, :], pad_height)
+    terrain.height_field_raw[-pad_width:, :] = np.maximum(terrain.height_field_raw[-pad_width:, :], pad_height)
+
+
+
+# end of new terrain
 
 def demo_terrain(terrain):
     goals = np.zeros((8, 2))
