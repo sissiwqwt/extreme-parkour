@@ -1,0 +1,40 @@
+Task-targeted curriculum smoke test passed.
+Importing module 'gym_38' (/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/_bindings/linux-x86_64/gym_38.so)
+Setting GYM_USD_PLUG_INFO_PATH to /home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/_bindings/linux-x86_64/usd/plugInfo.json
+PyTorch version 2.4.1+cu121
+Device count 1
+/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/_bindings/src/gymtorch
+Using /home/jq/.cache/torch_extensions/py38_cu121 as PyTorch extensions root...
+Emitting ninja build file /home/jq/.cache/torch_extensions/py38_cu121/gymtorch/build.ninja...
+Building extension module gymtorch...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+ninja: no work to do.
+Not connected to PVD
++++ Using GPU PhysX
+Physics Engine: PhysX
+Physics Device: cuda:0
+GPU Pipeline: enabled
+Loading extension module gymtorch...
+Setting seed: 1
+********************************************************************************
+Start creating ground...
+Traceback (most recent call last):
+  File "legged_gym/legged_gym/scripts/smoke_train_ttc.py", line 76, in <module>
+    main()
+  File "legged_gym/legged_gym/scripts/smoke_train_ttc.py", line 58, in main
+    env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/task_registry.py", line 98, in make_env
+    env = task_class(   cfg=env_cfg,
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/envs/base/legged_robot.py", line 99, in __init__
+    super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/envs/base/base_task.py", line 85, in __init__
+    self.create_sim()
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/envs/base/legged_robot.py", line 468, in create_sim
+    self.terrain = Terrain(self.cfg.terrain, self.num_envs)
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/terrain.py", line 71, in __init__
+    self.curiculum()
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/terrain.py", line 128, in curiculum
+    terrain = self.make_terrain(choice, difficulty)
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/terrain.py", line 378, in make_terrain
+    terrain.idx = idx
+UnboundLocalError: local variable 'idx' referenced before assignment
