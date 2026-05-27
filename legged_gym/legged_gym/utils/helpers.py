@@ -175,6 +175,16 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         # alg runner parameters
         if args.use_camera:
             cfg_train.depth_encoder.if_depth = args.use_camera
+        if args.enable_heading_model:
+            cfg_train.depth_encoder.enable_heading_model = True
+            cfg_train.depth_encoder.heading_mode = "body_vec_current_next"
+            cfg_train.depth_encoder.heading_dim = 4
+        if args.heading_pretrain_iters is not None:
+            cfg_train.depth_encoder.heading_pretrain_iters = args.heading_pretrain_iters
+        if args.heading_loss_weight is not None:
+            cfg_train.depth_encoder.heading_loss_weight = args.heading_loss_weight
+        if args.action_loss_weight is not None:
+            cfg_train.depth_encoder.action_loss_weight = args.action_loss_weight
         if args.max_iterations is not None:
             cfg_train.runner.max_iterations = args.max_iterations
         if args.resume:
@@ -218,12 +228,18 @@ def get_args():
         {"name": "--resumeid", "type": str, "help": "exptid"},
         {"name": "--daggerid", "type": str, "help": "name of dagger run"},
         {"name": "--use_camera", "action": "store_true", "default": False, "help": "render camera for distillation"},
+        {"name": "--enable_heading_model", "action": "store_true", "default": False, "help": "enable heading pretrain stage for depth distillation"},
+        {"name": "--heading_pretrain_iters", "type": int, "help": "number of initial vision iterations used for heading-only pretraining"},
+        {"name": "--heading_loss_weight", "type": float, "help": "heading/yaw prediction loss weight for depth distillation"},
+        {"name": "--action_loss_weight", "type": float, "help": "teacher action distillation loss weight for depth distillation"},
 
         {"name": "--mask_obs", "action": "store_true", "default": False, "help": "Mask observation when playing"},
         {"name": "--use_jit", "action": "store_true", "default": False, "help": "Load jit script when playing"},
         {"name": "--use_latent", "action": "store_true", "default": False, "help": "Load depth latent when playing"},
         {"name": "--draw", "action": "store_true", "default": False, "help": "draw debug plot when playing"},
         {"name": "--save", "action": "store_true", "default": False, "help": "save data for evaluation"},
+        {"name": "--play_steps", "type": int, "help": "Number of play loop steps. Overrides the default long playback loop."},
+        {"name": "--eval_steps", "type": int, "help": "Number of evaluation loop steps. Overrides the default evaluation loop."},
 
         {"name": "--task_both", "action": "store_true", "default": False, "help": "Both climbing and hitting policies"},
         {"name": "--nodelay", "action": "store_true", "default": False, "help": "Add action delay"},

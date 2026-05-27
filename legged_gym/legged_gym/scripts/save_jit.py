@@ -1,6 +1,14 @@
 import os, sys
 from statistics import mode
-sys.path.append("../../../rsl_rl")
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+for path in (
+    os.path.join(PROJECT_ROOT, "legged_gym"),
+    os.path.join(PROJECT_ROOT, "rsl_rl"),
+):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
 import torch
 import torch.nn as nn
 from rsl_rl.modules.actor_critic import Actor, StateHistoryEncoder, get_activation, ActorCriticRMA
@@ -67,7 +75,7 @@ class HardwareVisionNN(nn.Module):
         # return obs, depth_latent
 
 def play(args):    
-    load_run = "../../logs/parkour_new/" + args.exptid
+    load_run = "../../logs/{}/".format(args.proj_name) + args.exptid
     checkpoint = args.checkpoint
 
     n_priv_explicit = 3 + 3 + 3
@@ -94,7 +102,15 @@ def play(args):
     policy = policy.to(device)#.cpu()
     if not os.path.exists(os.path.join(load_run, "traced")):
         os.mkdir(os.path.join(load_run, "traced"))
-    state_dict = {'depth_encoder_state_dict': ac_state_dict['depth_encoder_state_dict']}
+    depth_encoder_state_dict = ac_state_dict['depth_encoder_state_dict']
+    depth_output_dim = depth_encoder_state_dict['output_mlp.0.weight'].shape[0]
+    heading_dim = depth_output_dim - 32
+    state_dict = {
+        'depth_encoder_state_dict': depth_encoder_state_dict,
+        'depth_encoder_output_dim': depth_output_dim,
+        'depth_heading_dim': heading_dim,
+        'depth_heading_mode': 'body_vec_current_next' if heading_dim == 4 else 'yaw_delta',
+    }
     torch.save(state_dict, os.path.join(load_run, "traced", args.exptid + "-" + str(checkpoint) + "-vision_weight.pt"))
 
     # Save the traced actor
@@ -117,6 +133,7 @@ def play(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--exptid', type=str)
+    parser.add_argument('--proj_name', type=str, default='parkour_new')
     parser.add_argument('--checkpoint', type=int, default=-1)
     parser.add_argument('--tanh', action='store_true')
     args = parser.parse_args()

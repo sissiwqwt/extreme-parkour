@@ -30,6 +30,7 @@
 
 import time
 import os
+import re
 from collections import deque
 import statistics
 
@@ -77,11 +78,15 @@ class OnPolicyRunner:
         # Depth encoder
         self.if_depth = self.depth_encoder_cfg["if_depth"]
         if self.if_depth:
+            enable_heading_model = self.depth_encoder_cfg.get("enable_heading_model", False)
+            heading_dim = self.depth_encoder_cfg.get("heading_dim", 4) if enable_heading_model else 2
+            if enable_heading_model and heading_dim != 4:
+                raise ValueError("enable_heading_model expects heading_dim=4 for current+next body-frame heading vectors.")
             depth_backbone = DepthOnlyFCBackbone58x87(env.cfg.env.n_proprio, 
                                                     self.policy_cfg["scan_encoder_dims"][-1], 
                                                     self.depth_encoder_cfg["hidden_dims"],
                                                     )
-            depth_encoder = RecurrentDepthBackbone(depth_backbone, env.cfg).to(self.device)
+            depth_encoder = RecurrentDepthBackbone(depth_backbone, env.cfg, heading_dim=heading_dim).to(self.device)
             depth_actor = deepcopy(actor_critic.actor)
         else:
             depth_encoder = None
@@ -116,6 +121,33 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+
+    def _split_depth_output(self, depth_output):
+        if self.depth_encoder_cfg.get("enable_heading_model", False):
+            heading_dim = self.depth_encoder_cfg.get("heading_dim", 4)
+        else:
+            heading_dim = 2
+        return depth_output[:, :-heading_dim], depth_output[:, -heading_dim:]
+
+    def _get_heading_label(self, obs):
+        if not self.depth_encoder_cfg.get("enable_heading_model", False):
+            return obs[:, 6:8]
+        delta_yaw = obs[:, 6]
+        delta_next_yaw = obs[:, 7]
+        return torch.stack((
+            torch.cos(delta_yaw),
+            torch.sin(delta_yaw),
+            torch.cos(delta_next_yaw),
+            torch.sin(delta_next_yaw),
+        ), dim=-1)
+
+    def _heading_to_actor_yaw(self, heading_pred):
+        if not self.depth_encoder_cfg.get("enable_heading_model", False):
+            heading_output_scale = self.depth_encoder_cfg.get("heading_output_scale", 1.5)
+            return heading_output_scale * heading_pred
+        delta_yaw = torch.atan2(heading_pred[:, 1], heading_pred[:, 0])
+        delta_next_yaw = torch.atan2(heading_pred[:, 3], heading_pred[:, 2])
+        return torch.stack((delta_yaw, delta_next_yaw), dim=-1)
         
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -155,6 +187,7 @@ class OnPolicyRunner:
         self.start_learning_iteration = copy(self.current_learning_iteration)
 
         for it in range(self.current_learning_iteration, tot_iter):
+            self.current_learning_iteration = it
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0
 
@@ -215,7 +248,7 @@ class OnPolicyRunner:
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
-        # self.current_learning_iteration += num_learning_iterations
+        self.current_learning_iteration = tot_iter
         if self.log_dir is not None:
             self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
@@ -236,9 +269,13 @@ class OnPolicyRunner:
         self.alg.depth_encoder.train()
         self.alg.depth_actor.train()
 
-        num_pretrain_iter = 0
+        enable_heading_model = self.depth_encoder_cfg.get("enable_heading_model", False)
+        num_pretrain_iter = self.depth_encoder_cfg.get("heading_pretrain_iters", 0) if enable_heading_model else 0
         for it in range(self.current_learning_iteration, tot_iter):
+            self.current_learning_iteration = it
             start = time.time()
+            local_it = it - self.start_learning_iteration
+            heading_pretrain = enable_heading_model and local_it < num_pretrain_iter
             depth_latent_buffer = []
             scandots_latent_buffer = []
             actions_teacher_buffer = []
@@ -253,14 +290,14 @@ class OnPolicyRunner:
                     scandots_latent_buffer.append(scandots_latent)
                     obs_prop_depth = obs[:, :self.env.cfg.env.n_proprio].clone()
                     obs_prop_depth[:, 6:8] = 0
-                    depth_latent_and_yaw = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)  # clone is crucial to avoid in-place operation
+                    depth_latent_and_heading = self.alg.depth_encoder(infos["depth"].clone(), obs_prop_depth)  # clone is crucial to avoid in-place operation
                     
-                    depth_latent = depth_latent_and_yaw[:, :-2]
-                    yaw = 1.5*depth_latent_and_yaw[:, -2:]
+                    depth_latent, heading_pred = self._split_depth_output(depth_latent_and_heading)
+                    yaw = self._heading_to_actor_yaw(heading_pred)
                     
                     depth_latent_buffer.append(depth_latent)
-                    yaw_buffer_student.append(yaw)
-                    yaw_buffer_teacher.append(obs[:, 6:8])
+                    yaw_buffer_student.append(heading_pred)
+                    yaw_buffer_teacher.append(self._get_heading_label(obs))
                 
                 with torch.no_grad():
                     actions_teacher = self.alg.actor_critic.act_inference(obs, hist_encoding=True, scandots_latent=None)
@@ -268,13 +305,15 @@ class OnPolicyRunner:
 
                 obs_student = obs.clone()
                 # obs_student[:, 6:8] = yaw.detach()
-                obs_student[infos["delta_yaw_ok"], 6:8] = yaw.detach()[infos["delta_yaw_ok"]]
+                if not heading_pretrain:
+                    obs_student[infos["delta_yaw_ok"], 6:8] = yaw.detach()[infos["delta_yaw_ok"]]
                 delta_yaw_ok_buffer.append(torch.nonzero(infos["delta_yaw_ok"]).size(0) / infos["delta_yaw_ok"].numel())
-                actions_student = self.alg.depth_actor(obs_student, hist_encoding=True, scandots_latent=depth_latent)
-                actions_student_buffer.append(actions_student)
+                if not heading_pretrain:
+                    actions_student = self.alg.depth_actor(obs_student, hist_encoding=True, scandots_latent=depth_latent)
+                    actions_student_buffer.append(actions_student)
 
                 # detach actions before feeding the env
-                if it < num_pretrain_iter:
+                if heading_pretrain:
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions_teacher.detach())  # obs has changed to next_obs !! if done obs has been reset
                 else:
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions_student.detach())  # obs has changed to next_obs !! if done obs has been reset
@@ -304,10 +343,15 @@ class OnPolicyRunner:
             # depth_encoder_loss = self.alg.update_depth_encoder(depth_latent_buffer, scandots_latent_buffer)
 
             actions_teacher_buffer = torch.cat(actions_teacher_buffer, dim=0)
-            actions_student_buffer = torch.cat(actions_student_buffer, dim=0)
             yaw_buffer_student = torch.cat(yaw_buffer_student, dim=0)
             yaw_buffer_teacher = torch.cat(yaw_buffer_teacher, dim=0)
-            depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher)
+            if heading_pretrain:
+                depth_actor_loss = 0
+                yaw_loss = self.alg.update_heading_predictor(yaw_buffer_student, yaw_buffer_teacher)
+            else:
+                actions_student_buffer = torch.cat(actions_student_buffer, dim=0)
+                depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher)
+            heading_loss = yaw_loss
 
             # depth_encoder_loss, depth_actor_loss = self.alg.update_depth_both(depth_latent_buffer, scandots_latent_buffer, actions_student_buffer, actions_teacher_buffer)
             stop = time.time()
@@ -317,11 +361,15 @@ class OnPolicyRunner:
 
             if self.log_dir is not None:
                 self.log_vision(locals())
-            if (it-self.start_learning_iteration < 2500 and it % self.save_interval == 0) or \
-               (it-self.start_learning_iteration < 5000 and it % (2*self.save_interval) == 0) or \
-               (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0):
+            if self.log_dir is not None and (
+               (it-self.start_learning_iteration < 2500 and it % self.save_interval == 0) or
+               (it-self.start_learning_iteration < 5000 and it % (2*self.save_interval) == 0) or
+               (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0)):
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
+        self.current_learning_iteration = tot_iter
+        if self.log_dir is not None:
+            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
     
     def log_vision(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -350,6 +398,8 @@ class OnPolicyRunner:
         wandb_dict['Loss_depth/depth_encoder'] = locs['depth_encoder_loss']
         wandb_dict['Loss_depth/depth_actor'] = locs['depth_actor_loss']
         wandb_dict['Loss_depth/yaw'] = locs['yaw_loss']
+        wandb_dict['Loss_depth/heading'] = locs.get('heading_loss', locs['yaw_loss'])
+        wandb_dict['Loss_depth/heading_pretrain'] = float(locs.get('heading_pretrain', False))
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
@@ -360,11 +410,11 @@ class OnPolicyRunner:
         
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        iteration_header = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
-                          f"""{str.center(width, ' ')}\n\n"""
+                          f"""{iteration_header.center(width, ' ')}\n\n"""
                           f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
@@ -372,7 +422,8 @@ class OnPolicyRunner:
                           f"""{'Mean episode length:':>{pad}} {statistics.mean(locs['lenbuffer']):.2f}\n"""
                           f"""{'Depth encoder loss:':>{pad}} {locs['depth_encoder_loss']:.4f}\n"""
                           f"""{'Depth actor loss:':>{pad}} {locs['depth_actor_loss']:.4f}\n"""
-                          f"""{'Yaw loss:':>{pad}} {locs['yaw_loss']:.4f}\n"""
+                          f"""{'Heading/Yaw loss:':>{pad}} {locs['yaw_loss']:.4f}\n"""
+                          f"""{'Heading pretrain:':>{pad}} {str(locs.get('heading_pretrain', False))}\n"""
                           f"""{'Delta yaw ok percentage:':>{pad}} {locs['delta_yaw_ok_percentage']:.4f}\n""")
         else:
             log_string = (f"""{'#' * width}\n""")
@@ -439,11 +490,11 @@ class OnPolicyRunner:
 
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        iteration_header = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
-                          f"""{str.center(width, ' ')}\n\n"""
+                          f"""{iteration_header.center(width, ' ')}\n\n"""
                           f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
@@ -460,7 +511,7 @@ class OnPolicyRunner:
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
         else:
             log_string = (f"""{'#' * width}\n"""
-                          f"""{str.center(width, ' ')}\n\n"""
+                          f"""{iteration_header.center(width, ' ')}\n\n"""
                           f"""{'Computation:':>{pad}} {fps:.0f} steps/s (collection: {locs[
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
@@ -509,7 +560,10 @@ class OnPolicyRunner:
                 warnings.warn("'depth_encoder_state_dict' key does not exist, not loading depth encoder...")
             else:
                 print("Saved depth encoder detected, loading...")
-                self.alg.depth_encoder.load_state_dict(loaded_dict['depth_encoder_state_dict'])
+                try:
+                    self.alg.depth_encoder.load_state_dict(loaded_dict['depth_encoder_state_dict'])
+                except RuntimeError as exc:
+                    warnings.warn("Skipping depth encoder state_dict because its shape does not match the current heading configuration: {}".format(exc))
             if 'depth_actor_state_dict' in loaded_dict:
                 print("Saved depth actor detected, loading...")
                 self.alg.depth_actor.load_state_dict(loaded_dict['depth_actor_state_dict'])
@@ -520,7 +574,11 @@ class OnPolicyRunner:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         if 'terrain_curriculum_state' in loaded_dict and hasattr(self.env, "load_terrain_curriculum_state"):
             self.env.load_terrain_curriculum_state(loaded_dict['terrain_curriculum_state'])
-        # self.current_learning_iteration = loaded_dict['iter']
+        checkpoint_iter = loaded_dict.get('iter', 0)
+        checkpoint_name_match = re.search(r"model_(\d+)\.pt$", os.path.basename(path))
+        if checkpoint_name_match is not None:
+            checkpoint_iter = int(checkpoint_name_match.group(1))
+        self.current_learning_iteration = checkpoint_iter + 1
         print("*" * 80)
         return loaded_dict['infos']
 

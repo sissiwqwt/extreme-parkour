@@ -127,6 +127,9 @@ class PPO:
             self.depth_encoder = depth_encoder
             self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
             self.depth_encoder_paras = depth_encoder_paras
+            self.enable_heading_model = depth_encoder_paras.get("enable_heading_model", False)
+            self.heading_loss_weight = depth_encoder_paras.get("heading_loss_weight", 1.0)
+            self.action_loss_weight = depth_encoder_paras.get("action_loss_weight", 1.0)
             self.depth_actor = depth_actor
             self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
 
@@ -327,13 +330,24 @@ class PPO:
             depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
 
-            loss = depth_actor_loss + yaw_loss
+            loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss
 
             self.depth_actor_optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.depth_actor.parameters(), self.max_grad_norm)
             self.depth_actor_optimizer.step()
             return depth_actor_loss.item(), yaw_loss.item()
+
+    def update_heading_predictor(self, yaw_student_batch, yaw_teacher_batch):
+        if self.if_depth:
+            yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
+            loss = self.heading_loss_weight * yaw_loss
+
+            self.depth_encoder_optimizer.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(self.depth_encoder.parameters(), self.max_grad_norm)
+            self.depth_encoder_optimizer.step()
+            return yaw_loss.item()
     
     def update_depth_both(self, depth_latent_batch, scandots_latent_batch, actions_student_batch, actions_teacher_batch):
         if self.if_depth:

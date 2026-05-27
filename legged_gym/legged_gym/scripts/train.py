@@ -33,11 +33,11 @@ import os
 import sys
 from datetime import datetime
 
-LOCAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 for path in (
-    os.path.join(LOCAL_ROOT, "isaacgym", "python"),
-    os.path.join(LOCAL_ROOT, "legged_gym"),
-    os.path.join(LOCAL_ROOT, "rsl_rl"),
+    os.path.join(PROJECT_ROOT, "isaacgym", "python"),
+    os.path.join(PROJECT_ROOT, "legged_gym"),
+    os.path.join(PROJECT_ROOT, "rsl_rl"),
 ):
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -66,7 +66,7 @@ def train(args):
     
     if args.no_wandb:
         mode = "disabled"
-    wandb.init(project=args.proj_name, name=args.exptid, entity="wenqianf85-shanghai-jiaotong-university", group=args.exptid[:3], mode=mode, dir="../../logs")
+    wandb.init(project=args.proj_name, name=args.exptid, entity="parkour", group=args.exptid[:3], mode=mode, dir="../../logs")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py", policy="now")
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
 

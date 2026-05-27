@@ -28,10 +28,20 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
-from legged_gym import LEGGED_GYM_ROOT_DIR
 import os
+import sys
 import code
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+for path in (
+    os.path.join(PROJECT_ROOT, "isaacgym", "python"),
+    os.path.join(PROJECT_ROOT, "legged_gym"),
+    os.path.join(PROJECT_ROOT, "rsl_rl"),
+):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+from legged_gym import LEGGED_GYM_ROOT_DIR
 import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger
@@ -61,6 +71,17 @@ def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="model"):
 
     # load_path = root + model
     return model, checkpoint
+
+def split_depth_heading(depth_output, depth_encoder_cfg):
+    heading_dim = depth_encoder_cfg.get("heading_dim", 4) if depth_encoder_cfg.get("enable_heading_model", False) else 2
+    return depth_output[:, :-heading_dim], depth_output[:, -heading_dim:]
+
+def heading_to_actor_yaw(heading_pred, depth_encoder_cfg):
+    if not depth_encoder_cfg.get("enable_heading_model", False):
+        return depth_encoder_cfg.get("heading_output_scale", 1.5) * heading_pred
+    delta_yaw = torch.atan2(heading_pred[:, 1], heading_pred[:, 0])
+    delta_next_yaw = torch.atan2(heading_pred[:, 3], heading_pred[:, 2])
+    return torch.stack((delta_yaw, delta_next_yaw), dim=-1)
 
 def play(args):
     if args.web:
@@ -144,17 +165,18 @@ def play(args):
     infos = {}
     infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
 
-    for i in tqdm(range(1500)):
+    num_steps = args.eval_steps if args.eval_steps is not None else 1500
+    for i in tqdm(range(num_steps)):
 
         if env.cfg.depth.use_camera:
             if infos["depth"] is not None:
-                obs_student = obs[:, :env.cfg.env.n_proprio]
+                obs_student = obs[:, :env.cfg.env.n_proprio].clone()
                 obs_student[:, 6:8] = 0
                 with torch.no_grad():
-                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
-                depth_latent = depth_latent_and_yaw[:, :-2]
-                yaw = depth_latent_and_yaw[:, -2:]
-            obs[:, 6:8] = 1.5*yaw
+                    depth_latent_and_heading = depth_encoder(infos["depth"], obs_student)
+                depth_latent, heading_pred = split_depth_heading(depth_latent_and_heading, ppo_runner.alg.depth_encoder_paras)
+                yaw = heading_to_actor_yaw(heading_pred, ppo_runner.alg.depth_encoder_paras)
+            obs[:, 6:8] = yaw
                 
         else:
             depth_latent = None
@@ -194,6 +216,12 @@ def play(args):
         cur_time_from_start[killed_ids] = 0
     
     #compute buffer mean and std
+    if len(rewbuffer) == 0 or len(lenbuffer) == 0 or len(num_waypoints_buffer) == 0:
+        print("No completed episodes during evaluation smoke test.")
+        print("Evaluation loop steps completed: {}".format(num_steps))
+        print("Mean edge violation: {:.2f}$\\pm${:.2f}".format(np.mean(edge_violation_buffer), np.std(edge_violation_buffer)))
+        return
+
     rew_mean = statistics.mean(rewbuffer)
     rew_std = statistics.stdev(rewbuffer)
 

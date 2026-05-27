@@ -786,6 +786,34 @@ def parkour_step_terrain(terrain,
 
 # new terrain
 
+def _sanitize_goals_on_safe_cells(terrain, goals, unsafe_height):
+    """Move generated goals off pits while keeping them close to the intended route."""
+    safe_goals = []
+    search_radius = round(0.5 / terrain.horizontal_scale)
+    for goal in np.asarray(goals):
+        x = int(round(goal[0]))
+        y = int(round(goal[1]))
+        x = int(np.clip(x, 0, terrain.width - 1))
+        y = int(np.clip(y, 0, terrain.length - 1))
+        if terrain.height_field_raw[x, y] > unsafe_height:
+            safe_goals.append([x, y])
+            continue
+
+        x0 = max(x - search_radius, 0)
+        x1 = min(x + search_radius + 1, terrain.width)
+        y0 = max(y - search_radius, 0)
+        y1 = min(y + search_radius + 1, terrain.length)
+        safe_cells = np.argwhere(terrain.height_field_raw[x0:x1, y0:y1] > unsafe_height)
+        if len(safe_cells) == 0:
+            safe_goals.append([x, y])
+            continue
+
+        safe_cells[:, 0] += x0
+        safe_cells[:, 1] += y0
+        distances = np.sum((safe_cells - np.array([x, y])) ** 2, axis=1)
+        safe_goals.append(safe_cells[np.argmin(distances)].tolist())
+    return np.asarray(safe_goals)
+
 def slanted_hurdle_terrain(
         terrain,
         platform_len=2.5,
@@ -957,13 +985,15 @@ def beam_gap_terrain(
 
     dis_x = platform_len
     goals[0] = [platform_len - 1, mid_y]
+    last_beam_center = mid_y
 
     for i in range(num_gaps):
         rand_x = np.random.randint(dis_x_min, dis_x_max)
         rand_y = round(np.random.uniform(y_offset_range[0], y_offset_range[1]) / terrain.horizontal_scale)
         dis_x += rand_x
 
-        beam_center = np.clip(mid_y + rand_y, beam_half_width + 1, terrain.length - beam_half_width - 1)
+        beam_center = int(np.clip(mid_y + rand_y, beam_half_width + 1, terrain.length - beam_half_width - 1))
+        last_beam_center = beam_center
 
         last_safe_x = max(dis_x - rand_x, 0)
         terrain.height_field_raw[last_safe_x:dis_x, beam_center - beam_half_width:beam_center + beam_half_width] = platform_height
@@ -978,8 +1008,8 @@ def beam_gap_terrain(
     if final_dis_x > terrain.width:
         final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
 
-    terrain.height_field_raw[dis_x:final_dis_x, mid_y - beam_half_width:mid_y + beam_half_width] = platform_height
-    goals[-1] = [final_dis_x, mid_y]
+    terrain.height_field_raw[dis_x:final_dis_x, last_beam_center - beam_half_width:last_beam_center + beam_half_width] = platform_height
+    goals[-1] = [(dis_x + final_dis_x) / 2, last_beam_center]
 
     terrain.goals = goals * terrain.horizontal_scale
 
@@ -1332,25 +1362,37 @@ def parkour_v2_terrain(
             goals.append([start_x + seg_len - 3, center_y])
 
         elif seg_type == "beam_gap":
-            beam_center = mid_y + np.random.randint(
-                round(-0.3 / terrain.horizontal_scale),
-                round(0.3 / terrain.horizontal_scale) + 1
-            )
             beam_half_width = round(np.random.uniform(0.25, 0.4) / terrain.horizontal_scale)
+            beam_center = int(np.clip(
+                mid_y + np.random.randint(
+                    round(-0.3 / terrain.horizontal_scale),
+                    round(0.3 / terrain.horizontal_scale) + 1
+                ),
+                beam_half_width + 1,
+                terrain.length - beam_half_width - 1,
+            ))
             terrain.height_field_raw[start_x:end_x, :] = gap_depth
             terrain.height_field_raw[start_x:end_x,
                                      beam_center - beam_half_width:beam_center + beam_half_width] = 0
 
             num_local = np.random.randint(1, 3)
+            gaps = []
             for _ in range(num_local):
                 gap_w = round(np.random.uniform(0.2, 0.35) / terrain.horizontal_scale)
                 gx = np.random.randint(start_x + gap_w, end_x - gap_w) if end_x - start_x > 2 * gap_w else start_x + (end_x - start_x) // 2
-                terrain.height_field_raw[max(gx - gap_w // 2, start_x):min(gx + gap_w // 2, end_x),
+                gap_x0 = max(gx - gap_w // 2, start_x)
+                gap_x1 = min(gx + gap_w // 2, end_x)
+                terrain.height_field_raw[gap_x0:gap_x1,
                                          beam_center - beam_half_width:beam_center + beam_half_width] = gap_depth
+                gaps.append((gap_x0, gap_x1))
 
-            goals.append([start_x + 2, beam_center])
-            goals.append([start_x + seg_len // 2, beam_center])
-            goals.append([start_x + seg_len - 3, beam_center])
+            safe_start = start_x
+            for gap_x0, gap_x1 in sorted(gaps):
+                if gap_x0 - safe_start > round(0.25 / terrain.horizontal_scale):
+                    goals.append([(safe_start + gap_x0) // 2, beam_center])
+                safe_start = max(safe_start, gap_x1)
+            if end_x - safe_start > round(0.25 / terrain.horizontal_scale):
+                goals.append([(safe_start + end_x) // 2, beam_center])
 
         elif seg_type == "biased_gap":
             # 在一个segment内放置3个相邻的小平台，左右交替错开
@@ -1359,10 +1401,6 @@ def parkour_v2_terrain(
             corridor_half_width = round(0.6 / terrain.horizontal_scale)
             lateral_offset = round(0.8 / terrain.horizontal_scale)
             
-            # 第一个平台的开始处goal
-            goals.append([start_x, mid_y])
-            
-            last_x = start_x
             for plat_id in range(num_platforms):
                 # 每个平台的位置
                 plat_start = start_x + plat_id * platform_size
@@ -1379,28 +1417,7 @@ def parkour_v2_terrain(
                 # 设置该小平台的可通行区域（中心），两侧为缺口
                 terrain.height_field_raw[plat_start:plat_end, :max(center_y - corridor_half_width, 0)] = gap_depth
                 terrain.height_field_raw[plat_start:plat_end, min(center_y + corridor_half_width, terrain.length):] = gap_depth
-                
-                # 平台端缺口（仅在两侧可通行区域外）
-                gap_w = round(np.random.uniform(0.15, 0.25) / terrain.horizontal_scale)
-                if plat_id < num_platforms - 1:
-                    gap_x = plat_end - gap_w // 2
-                    gap_x0 = max(gap_x - gap_w // 2, plat_start)
-                    gap_x1 = min(gap_x + gap_w // 2, plat_end)
-                    terrain.height_field_raw[gap_x0:gap_x1, :max(center_y - corridor_half_width, 0)] = gap_depth
-                    terrain.height_field_raw[gap_x0:gap_x1, min(center_y + corridor_half_width, terrain.length):] = gap_depth
-                    
-                    # 相邻平台间的中点goal
-                    next_sign = -sign
-                    next_center_y = int(round(np.clip(
-                        mid_y + next_sign * lateral_offset,
-                        corridor_half_width + 1,
-                        terrain.length - corridor_half_width - 1,
-                    )))
-                    goal_y = int((center_y + next_center_y) // 2)
-                    goals.append([plat_end, goal_y])
-                else:
-                    # 最后一个平台的末尾goal
-                    goals.append([plat_end, center_y])
+                goals.append([plat_start + (plat_end - plat_start) // 2, center_y])
 
         cur_x = end_x
         
@@ -1428,6 +1445,7 @@ def parkour_v2_terrain(
         goals = goals[keep_ids]
     elif len(goals) < num_goals:
         goals = np.concatenate([goals, np.repeat(goals[-1][None, :], num_goals - len(goals), axis=0)], axis=0)
+    goals = _sanitize_goals_on_safe_cells(terrain, goals, gap_depth)
 
     terrain.goals = goals * terrain.horizontal_scale
 

@@ -15,11 +15,6 @@ def update_task_targeted_curriculum(
     down_threshold,
     max_level,
 ):
-    """Update per-task terrain curriculum buffers and levels.
-
-    This is kept IsaacGym-free so the curriculum logic can be smoke-tested on
-    CPU before running the full simulator.
-    """
     success_rates = torch.zeros_like(levels, dtype=torch.float)
     updated_tasks = torch.zeros_like(levels, dtype=torch.bool)
 
