@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "legged_gym/tests/smoke_task_targeted_curriculum.py", line 3, in <module>
+    from legged_gym.utils.task_targeted_curriculum import update_task_targeted_curriculum
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/__init__.py", line 31, in <module>
+    from .helpers import class_to_dict, get_load_path, get_args, export_policy_as_jit, set_seed, update_class_from_dict
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/legged_gym/legged_gym/utils/helpers.py", line 36, in <module>
+    from isaacgym import gymapi
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/__init__.py", line 5, in <module>
+    from isaacgym import gymapi
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/gymapi.py", line 21, in <module>
+    from . import gymdeps
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/gymdeps.py", line 63, in <module>
+    _import_deps()
+  File "/home/jq/repos/project-extreme-parkour/extreme-parkour/isaacgym/python/isaacgym/gymdeps.py", line 21, in _import_deps
+    raise ImportError("PyTorch was imported before isaacgym modules.  Please import torch after isaacgym modules.")
+ImportError: PyTorch was imported before isaacgym modules.  Please import torch after isaacgym modules.

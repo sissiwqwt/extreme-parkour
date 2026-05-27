@@ -30,6 +30,7 @@
 
 import time
 import os
+import re
 from collections import deque
 import statistics
 
@@ -155,6 +156,7 @@ class OnPolicyRunner:
         self.start_learning_iteration = copy(self.current_learning_iteration)
 
         for it in range(self.current_learning_iteration, tot_iter):
+            self.current_learning_iteration = it
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0
 
@@ -215,7 +217,7 @@ class OnPolicyRunner:
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
-        # self.current_learning_iteration += num_learning_iterations
+        self.current_learning_iteration = tot_iter
         if self.log_dir is not None:
             self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
@@ -238,6 +240,7 @@ class OnPolicyRunner:
 
         num_pretrain_iter = 0
         for it in range(self.current_learning_iteration, tot_iter):
+            self.current_learning_iteration = it
             start = time.time()
             depth_latent_buffer = []
             scandots_latent_buffer = []
@@ -322,6 +325,9 @@ class OnPolicyRunner:
                (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0):
                     self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
+        self.current_learning_iteration = tot_iter
+        if self.log_dir is not None:
+            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
     
     def log_vision(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
@@ -520,7 +526,11 @@ class OnPolicyRunner:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         if 'terrain_curriculum_state' in loaded_dict and hasattr(self.env, "load_terrain_curriculum_state"):
             self.env.load_terrain_curriculum_state(loaded_dict['terrain_curriculum_state'])
-        # self.current_learning_iteration = loaded_dict['iter']
+        checkpoint_iter = loaded_dict.get('iter', 0)
+        checkpoint_name_match = re.search(r"model_(\d+)\.pt$", os.path.basename(path))
+        if checkpoint_name_match is not None:
+            checkpoint_iter = int(checkpoint_name_match.group(1))
+        self.current_learning_iteration = checkpoint_iter + 1
         print("*" * 80)
         return loaded_dict['infos']
 
