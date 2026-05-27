@@ -6,3 +6,5 @@ isaacgym*
 *.mp4
 *.patch
 *.log
+ppo.md
+usage.md
