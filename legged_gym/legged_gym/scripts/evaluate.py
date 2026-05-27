@@ -1,229 +1,483 @@
-# SPDX-FileCopyrightText: Copyright (c) 2021 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-# SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
-#
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
-# Copyright (c) 2021 ETH Zurich, Nikita Rudin
+"""Episode-level policy evaluation for the parkour experiments.
 
-from legged_gym import LEGGED_GYM_ROOT_DIR
+This script follows experiment_design.md and writes one CSV row per finished
+episode plus a JSON summary. It supports the base/teacher policy and the
+depth-camera student policy used by the existing play.py scripts.
+"""
+
+import argparse
+import csv
+import json
 import os
-import code
+import re
+import sys
+from collections import defaultdict
+from datetime import datetime
 
-import isaacgym
-from legged_gym.envs import *
-from legged_gym.utils import  get_args, export_policy_as_jit, task_registry, Logger
-from isaacgym import gymtorch, gymapi, gymutil
+import faulthandler
+
+import isaacgym  # noqa: F401
 import numpy as np
 import torch
-import cv2
-from collections import deque
-import statistics
-import faulthandler
-from copy import deepcopy
-import matplotlib.pyplot as plt
-from time import time, sleep
-from legged_gym.utils import webviewer
-from tqdm import tqdm
 
-def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="model"):
-                    
-    if checkpoint==-1:
-        models = [file for file in os.listdir(root) if model_name_include in file]
-        models.sort(key=lambda m: '{0:0>15}'.format(m))
-        model = models[-1]
-        checkpoint = model.split("_")[-1].split(".")[0]
-        # code.interact(local=locals())
-    # else:
-    #     model = "model{}_jit.pt".format(checkpoint) 
+from legged_gym import LEGGED_GYM_ROOT_DIR
+from legged_gym.envs import *  # noqa: F401,F403
+from legged_gym.utils import get_args, task_registry
+from legged_gym.utils.helpers import (
+    class_to_dict,
+    parse_bool,
+    parse_sim_params,
+    set_seed,
+    update_cfg_from_args,
+)
 
-    # load_path = root + model
-    return model, checkpoint
 
-def play(args):
-    if args.web:
-        web_viewer = webviewer.WebViewer()
-    faulthandler.enable()
-    exptid = args.exptid
-    log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
-    env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
-    # override some parameters for testing
-    if args.nodelay:
-        env_cfg.domain_rand.action_delay_view = 0
-    env_cfg.env.num_envs = 256
-    env_cfg.env.episode_length_s = 20
-    env_cfg.commands.resampling_time = 60
+CSV_FIELDS = [
+    "policy_id",
+    "checkpoint",
+    "seed",
+    "env_id",
+    "terrain_name",
+    "terrain_type",
+    "terrain_level",
+    "start_x",
+    "final_x",
+    "mxd",
+    "num_waypoints",
+    "normalized_waypoints",
+    "episode_length",
+    "success",
+    "fall",
+    "stuck",
+    "edge_violation",
+    "failure_reason",
+]
+
+BASELINE_TERRAINS = {
+    "parkour": 0.25,
+    "parkour_hurdle": 0.25,
+    "parkour_step": 0.25,
+    "parkour_gap": 0.25,
+}
+
+NEW_TERRAINS = {
+    "alternating_step": 0.25,
+    "beam_gap": 0.25,
+    "biased_gap": 0.25,
+    "parkour_v2": 0.25,
+}
+
+TERRAIN_ALIASES = {
+    # Names used in experiment_design.md -> names currently present in config.
+    "beam_gap": "bean_gap",
+    "biased_gap": "asymmetric_gap",
+    "slanted_hurdle": "parkour_v2",
+}
+
+
+def _pop_eval_argv():
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--policy_id", type=str, default=None)
+    parser.add_argument("--eval_episodes", type=int, default=256)
+    parser.add_argument("--eval_max_steps", type=int, default=None)
+    parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument("--terrain_set", choices=("baseline", "new", "all"), default="all")
+    parser.add_argument(
+        "--terrain_names",
+        type=str,
+        default=None,
+        help="Comma-separated terrain names. Accepts beam_gap/biased_gap aliases.",
+    )
+    parser.add_argument("--episode_length_s", type=float, default=60.0)
+    parser.add_argument("--success_threshold", type=float, default=1.0)
+    parser.add_argument("--stuck_window_s", type=float, default=2.0)
+    parser.add_argument("--stuck_threshold_m", type=float, default=0.1)
+    parser.add_argument("--push_robots", type=parse_bool, default=False)
+    parser.add_argument("--randomize_friction", type=parse_bool, default=True)
+    parser.add_argument("--add_noise", type=parse_bool, default=True)
+    parser.add_argument("--max_difficulty", type=parse_bool, default=True)
+    parser.add_argument(
+        "--policy_type",
+        choices=("auto", "base", "depth"),
+        default="auto",
+        help="auto uses --use_camera to choose depth vs base inference.",
+    )
+    ns, rest = parser.parse_known_args()
+    sys.argv = [sys.argv[0]] + rest
+    return ns
+
+
+def _safe_filename(value):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "eval"
+
+
+def _checkpoint_label(args):
+    return "latest" if args.checkpoint is None or args.checkpoint == -1 else str(args.checkpoint)
+
+
+def _zeroed_terrain_dict(env_cfg):
+    return {name: 0.0 for name in env_cfg.terrain.terrain_dict.keys()}
+
+
+def _canonical_terrain_name(name, env_cfg):
+    name = name.strip()
+    mapped = TERRAIN_ALIASES.get(name, name)
+    if mapped not in env_cfg.terrain.terrain_dict:
+        raise ValueError(
+            f"Unknown terrain '{name}' (mapped to '{mapped}'). "
+            f"Available: {sorted(env_cfg.terrain.terrain_dict.keys())}"
+        )
+    return mapped
+
+
+def _terrain_name_map(env_cfg):
+    proportions = np.asarray(env_cfg.terrain.terrain_proportions, dtype=np.float64)
+    if proportions.sum() <= 0:
+        return {}
+
+    cumulative = np.cumsum(proportions / proportions.sum())
+    result = {}
+    keys = list(env_cfg.terrain.terrain_dict.keys())
+    for col in range(env_cfg.terrain.num_cols):
+        choice = col / env_cfg.terrain.num_cols + 0.001
+        terrain_idx = int(np.searchsorted(cumulative, choice, side="right"))
+        terrain_idx = min(terrain_idx, len(keys) - 1)
+        result[col] = keys[terrain_idx]
+    return result
+
+
+def _configure_eval_env(env_cfg, eval_cfg):
+    env_cfg.env.episode_length_s = eval_cfg.episode_length_s
+    env_cfg.commands.resampling_time = eval_cfg.episode_length_s
     env_cfg.terrain.num_rows = 5
-    env_cfg.terrain.num_cols = 5
+    env_cfg.terrain.num_cols = max(5, env_cfg.terrain.num_cols)
     env_cfg.terrain.height = [0.02, 0.02]
-    env_cfg.terrain.terrain_dict = {"smooth slope": 0., 
-                                    "rough slope up": 0.0,
-                                    "rough slope down": 0.0,
-                                    "rough stairs up": 0., 
-                                    "rough stairs down": 0., 
-                                    "discrete": 0., 
-                                    "stepping stones": 0.0,
-                                    "gaps": 0., 
-                                    "smooth flat": 0,
-                                    "pit": 0.0,
-                                    "wall": 0.0,
-                                    "platform": 0.,
-                                    "large stairs up": 0.,
-                                    "large stairs down": 0.,
-                                    "parkour": 0.25,
-                                    "parkour_hurdle": 0.25,
-                                    "parkour_flat": 0.,
-                                    "parkour_step": 0.25,
-                                    "parkour_gap": 0.25, 
-                                    "demo": 0}
-    
-    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
-    env_cfg.terrain.max_difficulty = False
-    
+    env_cfg.terrain.max_difficulty = eval_cfg.max_difficulty
     env_cfg.depth.angle = [0, 1]
-    env_cfg.noise.add_noise = True
-    env_cfg.domain_rand.randomize_friction = True
-    env_cfg.domain_rand.push_robots = True
+    env_cfg.noise.add_noise = eval_cfg.add_noise
+    env_cfg.domain_rand.randomize_friction = eval_cfg.randomize_friction
+    env_cfg.domain_rand.push_robots = eval_cfg.push_robots
     env_cfg.domain_rand.push_interval_s = 6
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
 
-    depth_latent_buffer = []
-    # prepare environment
-    env: LeggedRobot
-    env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
+    terrain_dict = _zeroed_terrain_dict(env_cfg)
+    if eval_cfg.terrain_names:
+        names = [n for n in eval_cfg.terrain_names.split(",") if n.strip()]
+        weight = 1.0 / len(names)
+        for name in names:
+            terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight
+    else:
+        selected = {}
+        if eval_cfg.terrain_set in ("baseline", "all"):
+            selected.update(BASELINE_TERRAINS)
+        if eval_cfg.terrain_set in ("new", "all"):
+            selected.update(NEW_TERRAINS)
+        total = sum(selected.values())
+        for name, weight in selected.items():
+            terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight / total
+
+    env_cfg.terrain.terrain_dict = terrain_dict
+    env_cfg.terrain.terrain_proportions = list(terrain_dict.values())
+
+
+def _tensor_to_list(tensor):
+    return tensor.detach().cpu().numpy().tolist()
+
+
+def _failure_reason(success, fall, stuck, timeout):
+    if success:
+        return "success"
+    if fall:
+        return "fall"
+    if stuck:
+        return "stuck"
+    if timeout:
+        return "timeout"
+    return "reset"
+
+
+def _install_terminal_snapshot(env):
+    env._eval_terminal_valid = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+    env._eval_terminal_final_x = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    env._eval_terminal_goal_idx = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    env._eval_terminal_episode_length = torch.zeros(
+        env.num_envs, dtype=torch.long, device=env.device
+    )
+    env._eval_terminal_level = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    env._eval_terminal_col = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
+    env._eval_terminal_class = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    env._eval_terminal_timeout = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    original_reset_idx = env.reset_idx
+
+    def wrapped_reset_idx(env_ids):
+        if len(env_ids) > 0:
+            ids = env_ids.detach().clone()
+            env._eval_terminal_valid[ids] = True
+            env._eval_terminal_final_x[ids] = env.root_states[ids, 0]
+            env._eval_terminal_goal_idx[ids] = env.cur_goal_idx[ids]
+            env._eval_terminal_episode_length[ids] = env.episode_length_buf[ids]
+            env._eval_terminal_level[ids] = env.terrain_levels[ids]
+            env._eval_terminal_col[ids] = env.terrain_types[ids]
+            env._eval_terminal_class[ids] = env.env_class[ids]
+            env._eval_terminal_timeout[ids] = env.time_out_buf[ids]
+        return original_reset_idx(env_ids)
+
+    env.reset_idx = wrapped_reset_idx
+
+
+def _make_eval_env(name, args, env_cfg, terrain_dict):
+    task_class = task_registry.get_task_class(name)
+    env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
+    env_cfg.terrain.terrain_dict = dict(terrain_dict)
+    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    set_seed(env_cfg.seed)
+    sim_params = {"sim": class_to_dict(env_cfg.sim)}
+    sim_params = parse_sim_params(args, sim_params)
+    env = task_class(
+        cfg=env_cfg,
+        sim_params=sim_params,
+        physics_engine=args.physics_engine,
+        sim_device=args.sim_device,
+        headless=args.headless,
+    )
+    return env, env_cfg
+
+
+def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
+    depth_latent = None
+    if policy_type == "depth":
+        if infos.get("depth") is not None:
+            obs_student = obs[:, : env.cfg.env.n_proprio].clone()
+            obs_student[:, 6:8] = 0
+            with torch.no_grad():
+                depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
+            depth_latent = depth_latent_and_yaw[:, :-2]
+            yaw = depth_latent_and_yaw[:, -2:]
+            obs[:, 6:8] = 1.5 * yaw
+
+    with torch.no_grad():
+        if policy_type == "depth" and hasattr(ppo_runner.alg, "depth_actor"):
+            return ppo_runner.alg.depth_actor(
+                obs.detach(), hist_encoding=True, scandots_latent=depth_latent
+            )
+        return policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+
+
+def evaluate(args, eval_cfg):
+    faulthandler.enable()
+    args.headless = True
+
+    policy_type = eval_cfg.policy_type
+    if policy_type == "auto":
+        policy_type = "depth" if args.use_camera else "base"
+    if policy_type == "depth":
+        args.use_camera = True
+    elif policy_type == "base":
+        args.use_camera = False
+
+    env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
+    if args.num_envs is None:
+        args.num_envs = 256 if policy_type == "base" else 128
+    env_cfg.env.num_envs = args.num_envs
+    _configure_eval_env(env_cfg, eval_cfg)
+    terrain_dict = dict(env_cfg.terrain.terrain_dict)
+    if policy_type == "depth":
+        env_cfg.depth.camera_num_envs = env_cfg.env.num_envs
+        env_cfg.depth.camera_terrain_num_rows = env_cfg.terrain.num_rows
+        env_cfg.depth.camera_terrain_num_cols = env_cfg.terrain.num_cols
+        env_cfg.terrain.max_error_camera = env_cfg.terrain.max_error
+        env_cfg.terrain.horizontal_scale_camera = env_cfg.terrain.horizontal_scale
+
+    log_pth = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.proj_name, args.exptid)
+    env, env_cfg = _make_eval_env(args.task, args, env_cfg, terrain_dict)
+    _install_terminal_snapshot(env)
     obs = env.get_observations()
 
-    if args.web:
-        web_viewer.setup(env)
-
-    # load policy
     train_cfg.runner.resume = True
-    ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
-    
+    ppo_runner, train_cfg, resolved_log_pth = task_registry.make_alg_runner(
+        log_root=log_pth,
+        env=env,
+        name=args.task,
+        args=args,
+        train_cfg=train_cfg,
+        return_log_dir=True,
+        init_wandb=False,
+    )
     policy = ppo_runner.get_inference_policy(device=env.device)
-    if env.cfg.depth.use_camera:
-        depth_encoder = ppo_runner.get_depth_encoder_inference_policy(device=env.device)
-    
-    total_steps = 1000
-    rewbuffer = deque(maxlen=total_steps)
-    lenbuffer = deque(maxlen=total_steps)
-    num_waypoints_buffer = deque(maxlen=total_steps)
-    time_to_fall_buffer = deque(maxlen=total_steps)
-    edge_violation_buffer = deque(maxlen=total_steps)
+    depth_encoder = (
+        ppo_runner.get_depth_encoder_inference_policy(device=env.device)
+        if policy_type == "depth"
+        else None
+    )
 
-    cur_reward_sum = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    cur_episode_length = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    cur_edge_violation = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    cur_time_from_start = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    policy_id = eval_cfg.policy_id or args.exptid or "policy"
+    checkpoint = _checkpoint_label(args)
+    output_dir = eval_cfg.output_dir or os.path.join(
+        LEGGED_GYM_ROOT_DIR, "logs", "evaluation"
+    )
+    os.makedirs(output_dir, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    basename = f"{stamp}_{_safe_filename(policy_id)}_{checkpoint}"
+    csv_path = os.path.join(output_dir, basename + ".csv")
+    json_path = os.path.join(output_dir, basename + ".json")
 
-    actions = torch.zeros(env.num_envs, 12, device=env.device, requires_grad=False)
-    infos = {}
-    infos["depth"] = env.depth_buffer.clone().to(ppo_runner.device)[:, -1] if ppo_runner.if_depth else None
+    terrain_lookup = _terrain_name_map(env_cfg)
+    num_goals = max(1, int(env_cfg.terrain.num_goals))
+    success_threshold = float(eval_cfg.success_threshold)
+    stuck_window_steps = max(1, int(round(eval_cfg.stuck_window_s / env.dt)))
+    max_steps = eval_cfg.eval_max_steps or int(env.max_episode_length * 20)
 
-    for i in tqdm(range(1500)):
+    start_x = env.root_states[:, 0].clone()
+    last_window_x = env.root_states[:, 0].clone()
+    edge_sum = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    step_sum = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
 
-        if env.cfg.depth.use_camera:
-            if infos["depth"] is not None:
-                obs_student = obs[:, :env.cfg.env.n_proprio]
-                obs_student[:, 6:8] = 0
-                with torch.no_grad():
-                    depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
-                depth_latent = depth_latent_and_yaw[:, :-2]
-                yaw = depth_latent_and_yaw[:, -2:]
-            obs[:, 6:8] = 1.5*yaw
-                
-        else:
-            depth_latent = None
+    rows = []
+    infos = {
+        "depth": env.depth_buffer.clone().to(ppo_runner.device)[:, -1]
+        if policy_type == "depth" and ppo_runner.if_depth
+        else None
+    }
 
-        if hasattr(ppo_runner.alg, "depth_actor"):
-            with torch.no_grad():
-                actions = ppo_runner.alg.depth_actor(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-        else:
-            actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
-            
-        cur_goal_idx = env.cur_goal_idx.clone()
-        obs, _, rews, dones, infos = env.step(actions.detach())
-        if args.web:
-            web_viewer.render(fetch_results=True,
-                        step_graphics=True,
-                        render_all_camera_sensors=True,
-                        wait_for_page_load=True)
-        
-        id = env.lookat_id
-        # Log stuff
-        edge_violation_buffer.extend(env.feet_at_edge.sum(dim=1).float().cpu().numpy().tolist())
-        # cur_edge_violation += env.feet_at_edge.sum(dim=1).float()
-        cur_reward_sum += rews
-        cur_episode_length += 1
-        cur_time_from_start += 1
+    print(
+        f"Evaluating {policy_id} ({policy_type}) for {eval_cfg.eval_episodes} episodes "
+        f"with {env.num_envs} envs -> {csv_path}"
+    )
 
-        new_ids = (dones > 0).nonzero(as_tuple=False)
-        killed_ids = ((dones > 0) & (~infos["time_outs"])).nonzero(as_tuple=False)
-        rewbuffer.extend(cur_reward_sum[new_ids][:, 0].cpu().numpy().tolist())
-        lenbuffer.extend(cur_episode_length[new_ids][:, 0].cpu().numpy().tolist())
-        num_waypoints_buffer.extend(cur_goal_idx[new_ids][:, 0].cpu().numpy().tolist())
-        time_to_fall_buffer.extend(cur_time_from_start[killed_ids][:, 0].cpu().numpy().tolist())
+    for step in range(max_steps):
+        actions = _run_policy_step(
+            args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type
+        )
 
-        cur_reward_sum[new_ids] = 0
-        cur_episode_length[new_ids] = 0
-        cur_edge_violation[new_ids] = 0
-        cur_time_from_start[killed_ids] = 0
-    
-    #compute buffer mean and std
-    rew_mean = statistics.mean(rewbuffer)
-    rew_std = statistics.stdev(rewbuffer)
+        prev_start_x = start_x.clone()
+        prev_last_window_x = last_window_x.clone()
 
-    len_mean = statistics.mean(lenbuffer)
-    len_std = statistics.stdev(lenbuffer)
+        obs, _, _, dones, infos = env.step(actions.detach())
 
-    num_waypoints_mean = np.mean(np.array(num_waypoints_buffer).astype(float)/7.0)
-    num_waypoints_std = np.std(np.array(num_waypoints_buffer).astype(float)/7.0)
+        feet_at_edge = getattr(env, "feet_at_edge", None)
+        if feet_at_edge is not None:
+            edge_sum += feet_at_edge.sum(dim=1).float()
+        step_sum += 1.0
 
-    # time_to_fall_mean = statistics.mean(time_to_fall_buffer)
-    # time_to_fall_std = statistics.stdev(time_to_fall_buffer)
+        if (step + 1) % stuck_window_steps == 0:
+            last_window_x = env.root_states[:, 0].clone()
 
-    edge_violation_mean = np.mean(edge_violation_buffer)
-    edge_violation_std = np.std(edge_violation_buffer)
+        done_ids = (dones > 0).nonzero(as_tuple=False).flatten()
+        if done_ids.numel() > 0:
+            for env_id in _tensor_to_list(done_ids):
+                if not bool(env._eval_terminal_valid[env_id].item()):
+                    continue
+                final_x = float(env._eval_terminal_final_x[env_id].item())
+                sx = float(prev_start_x[env_id].item())
+                mxd = final_x - sx
+                num_waypoints = int(env._eval_terminal_goal_idx[env_id].item())
+                normalized = min(1.0, num_waypoints / float(num_goals))
+                success = normalized >= success_threshold
+                timeout = bool(env._eval_terminal_timeout[env_id].item())
+                fall = bool((dones[env_id] > 0).item() and not timeout and not success)
+                recent_progress = final_x - float(prev_last_window_x[env_id].item())
+                stuck = (not success) and (not fall) and recent_progress < eval_cfg.stuck_threshold_m
+                edge_violation = float(
+                    edge_sum[env_id].item() / max(step_sum[env_id].item(), 1.0)
+                )
+                terrain_col = int(env._eval_terminal_col[env_id].item())
+                terrain_name = terrain_lookup.get(terrain_col, f"col_{terrain_col}")
 
-    print("Mean reward: {:.2f}$\pm${:.2f}".format(rew_mean, rew_std))
-    print("Mean episode length: {:.2f}$\pm${:.2f}".format(len_mean, len_std))
-    print("Mean number of waypoints: {:.2f}$\pm${:.2f}".format(num_waypoints_mean, num_waypoints_std))
-    # print("Mean time to fall: {:.2f}$\pm${:.2f}".format(time_to_fall_mean, time_to_fall_std))
-    print("Mean edge violation: {:.2f}$\pm${:.2f}".format(edge_violation_mean, edge_violation_std))
+                rows.append(
+                    {
+                        "policy_id": policy_id,
+                        "checkpoint": checkpoint,
+                        "seed": env_cfg.seed,
+                        "env_id": int(env_id),
+                        "terrain_name": terrain_name,
+                        "terrain_type": int(env._eval_terminal_class[env_id].item()),
+                        "terrain_level": int(env._eval_terminal_level[env_id].item()),
+                        "start_x": sx,
+                        "final_x": final_x,
+                        "mxd": mxd,
+                        "num_waypoints": num_waypoints,
+                        "normalized_waypoints": normalized,
+                        "episode_length": int(
+                            env._eval_terminal_episode_length[env_id].item()
+                        ),
+                        "success": int(success),
+                        "fall": int(fall),
+                        "stuck": int(stuck),
+                        "edge_violation": edge_violation,
+                        "failure_reason": _failure_reason(success, fall, stuck, timeout),
+                    }
+                )
+
+            start_x[done_ids] = env.root_states[done_ids, 0]
+            last_window_x[done_ids] = env.root_states[done_ids, 0]
+            edge_sum[done_ids] = 0.0
+            step_sum[done_ids] = 0.0
+            env._eval_terminal_valid[done_ids] = False
+
+        if len(rows) >= eval_cfg.eval_episodes:
+            rows = rows[: eval_cfg.eval_episodes]
+            break
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    summary = _summarize(rows, csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type)
+    with open(json_path, "w") as f:
+        json.dump(summary, f, indent=2)
+
+    print(json.dumps(summary["metrics"], indent=2))
+    print(f"Wrote CSV: {csv_path}")
+    print(f"Wrote JSON: {json_path}")
 
 
-if __name__ == '__main__':
-    EXPORT_POLICY = False
-    RECORD_FRAMES = False
-    MOVE_CAMERA = False
-    args = get_args()
-    play(args)
+def _summarize(rows, csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type):
+    metrics = {
+        "episodes": len(rows),
+        "success_rate": float(np.mean([r["success"] for r in rows])) if rows else 0.0,
+        "fall_rate": float(np.mean([r["fall"] for r in rows])) if rows else 0.0,
+        "stuck_rate": float(np.mean([r["stuck"] for r in rows])) if rows else 0.0,
+        "mean_mxd": float(np.mean([r["mxd"] for r in rows])) if rows else 0.0,
+        "mean_normalized_waypoints": float(np.mean([r["normalized_waypoints"] for r in rows]))
+        if rows
+        else 0.0,
+        "mean_edge_violation": float(np.mean([r["edge_violation"] for r in rows]))
+        if rows
+        else 0.0,
+    }
+
+    by_terrain = defaultdict(list)
+    for row in rows:
+        by_terrain[row["terrain_name"]].append(row)
+    terrain_metrics = {}
+    for name, group in by_terrain.items():
+        terrain_metrics[name] = {
+            "episodes": len(group),
+            "success_rate": float(np.mean([r["success"] for r in group])),
+            "fall_rate": float(np.mean([r["fall"] for r in group])),
+            "stuck_rate": float(np.mean([r["stuck"] for r in group])),
+            "mean_mxd": float(np.mean([r["mxd"] for r in group])),
+            "mean_edge_violation": float(np.mean([r["edge_violation"] for r in group])),
+        }
+
+    return {
+        "csv_path": csv_path,
+        "resolved_log_path": resolved_log_pth,
+        "policy_type": policy_type,
+        "terrain_dict": env_cfg.terrain.terrain_dict,
+        "success_threshold": eval_cfg.success_threshold,
+        "stuck_window_s": eval_cfg.stuck_window_s,
+        "stuck_threshold_m": eval_cfg.stuck_threshold_m,
+        "metrics": metrics,
+        "terrain_metrics": terrain_metrics,
+    }
 
 
-# 038-10 no feet edge
-# 038-91 ours
-# 043-21 non-inner
+if __name__ == "__main__":
+    eval_cli = _pop_eval_argv()
+    cli = get_args()
+    evaluate(cli, eval_cli)
