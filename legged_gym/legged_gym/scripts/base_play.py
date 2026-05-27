@@ -55,6 +55,19 @@ def _pop_script_argv():
     parser.add_argument("--camera_smooth", type=float, default=0.14)
     parser.add_argument("--record_width", type=int, default=960)
     parser.add_argument("--record_height", type=int, default=540)
+    difficulty_group = parser.add_mutually_exclusive_group()
+    difficulty_group.add_argument(
+        "--terrain_level",
+        type=int,
+        default=None,
+        help="Fixed terrain row to play on. With the default 5 rows, valid values are 0..4.",
+    )
+    difficulty_group.add_argument(
+        "--terrain_difficulty",
+        type=float,
+        default=None,
+        help="Fixed normalized terrain difficulty in [0, 1]. Mapped to the nearest terrain row.",
+    )
     parser.add_argument(
         "--cpu",
         action="store_true",
@@ -201,7 +214,36 @@ def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict):
     return env, env_cfg
 
 
-def _configure_eval_env(env_cfg):
+def _requested_terrain_level(rec_cfg, num_rows):
+    if rec_cfg.terrain_level is not None:
+        if rec_cfg.terrain_level < 0 or rec_cfg.terrain_level >= num_rows:
+            raise ValueError(
+                f"--terrain_level must be in [0, {num_rows - 1}], got {rec_cfg.terrain_level}"
+            )
+        return rec_cfg.terrain_level
+
+    if rec_cfg.terrain_difficulty is not None:
+        if rec_cfg.terrain_difficulty < 0.0 or rec_cfg.terrain_difficulty > 1.0:
+            raise ValueError(
+                f"--terrain_difficulty must be in [0, 1], got {rec_cfg.terrain_difficulty}"
+            )
+        return int(round(rec_cfg.terrain_difficulty * (num_rows - 1)))
+
+    return None
+
+
+def _apply_fixed_terrain_level(env, terrain_level):
+    if terrain_level is None:
+        return
+
+    env.cfg.terrain.curriculum = False
+    env.terrain_levels[:] = int(terrain_level)
+    env._refresh_terrain_state()
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    env.reset_idx(env_ids)
+
+
+def _configure_eval_env(env_cfg, rec_cfg):
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
     env_cfg.terrain.num_rows = 5
@@ -228,17 +270,23 @@ def _configure_eval_env(env_cfg):
         "parkour_step": 0.0,
         "parkour_gap": 0.0,
         "alternating_step": 0.0,
-        "bean_gap": 0.1,
+        "bean_gap": 0.0,
         "asymmetric_gap": 0.0,
         "parkour_v2": 0.0,
         "narrow_gap": 0.0,
-        "climbing_wall": 0.0,
-        "demo": 0.2,
+        "climbing_wall": 1.0,
+        "demo": 0.0,
     }
     terrain_dict = dict(env_cfg.terrain.terrain_dict)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
-    env_cfg.terrain.curriculum = False
-    env_cfg.terrain.max_difficulty = True
+    terrain_level = _requested_terrain_level(rec_cfg, env_cfg.terrain.num_rows)
+    if terrain_level is None:
+        env_cfg.terrain.curriculum = False
+        env_cfg.terrain.max_difficulty = True
+    else:
+        env_cfg.terrain.curriculum = True
+        env_cfg.terrain.task_targeted_curriculum = False
+        env_cfg.terrain.max_init_terrain_level = terrain_level
     env_cfg.depth.angle = [0, 1]
     env_cfg.noise.add_noise = True
     env_cfg.domain_rand.randomize_friction = True
@@ -246,7 +294,7 @@ def _configure_eval_env(env_cfg):
     env_cfg.domain_rand.push_interval_s = 6
     env_cfg.domain_rand.randomize_base_mass = False
     env_cfg.domain_rand.randomize_base_com = False
-    return terrain_dict
+    return terrain_dict, terrain_level
 
 
 def play_base(args, rec_cfg):
@@ -277,7 +325,7 @@ def play_base(args, rec_cfg):
     if args.nodelay:
         env_cfg.domain_rand.action_delay_view = 0
     env_cfg.env.num_envs = args.num_envs
-    terrain_dict = _configure_eval_env(env_cfg)
+    terrain_dict, terrain_level = _configure_eval_env(env_cfg, rec_cfg)
 
     # Isaac Gym can create camera sensors in headless mode only when the env
     # keeps a real graphics device. LeggedRobot does that behind depth.use_camera.
@@ -297,6 +345,7 @@ def play_base(args, rec_cfg):
         env_cfg=env_cfg,
         terrain_dict=terrain_dict,
     )
+    _apply_fixed_terrain_level(env, terrain_level)
     obs = env.get_observations()
     args.use_camera = False
     train_cfg.depth_encoder.if_depth = False
@@ -364,6 +413,12 @@ def play_base(args, rec_cfg):
     writer.write(first)
     print(f"Recording base policy env {rec_cfg.record_env} -> {video_path} @ {fps} FPS, {w}x{h}")
     print("Using true waypoint yaw from obs[:, 6:8]; no depth encoder is used.")
+    if terrain_level is not None:
+        terrain_difficulty = terrain_level / max(env_cfg.terrain.num_rows - 1, 1)
+        print(
+            f"Using fixed terrain level {terrain_level}/{env_cfg.terrain.num_rows - 1} "
+            f"(difficulty {terrain_difficulty:.2f})."
+        )
 
     try:
         for _ in range(int(env.max_episode_length)):
