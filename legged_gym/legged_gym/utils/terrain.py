@@ -396,6 +396,20 @@ class Terrain:
                                pad_height=0.5)
             self.add_roughness(terrain)
         elif choice < self.proportions[25]:
+            idx = 27
+            slanted_hurdle_terrain(terrain,
+                                   platform_len=2.5,
+                                   platform_height=0.0,
+                                   num_stones=self.num_goals - 2,
+                                   x_range=[1.2, 2.0],
+                                   y_range=self.cfg.y_range,
+                                   half_valid_width=[0.45, 0.8],
+                                   hurdle_height_range=[0.12, 0.28],
+                                   hurdle_depth_range=[0.35, 0.7],
+                                   pad_width=0.1,
+                                   pad_height=0.5)
+            self.add_roughness(terrain)
+        elif choice < self.proportions[26]:
             idx = 26
             demo_terrain(terrain)
             self.add_roughness(terrain)

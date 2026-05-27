@@ -228,11 +228,12 @@ def _configure_eval_env(env_cfg):
         "parkour_step": 0.0,
         "parkour_gap": 0.0,
         "alternating_step": 0.0,
-        "bean_gap": 0.1,
-        "asymmetric_gap": 0.0,
+        "beam_gap": 0.1,
+        "biased_gap": 0.0,
         "parkour_v2": 0.0,
         "narrow_gap": 0.0,
         "climbing_wall": 0.0,
+        "slanted_hurdle": 0.0,
         "demo": 0.2,
     }
     terrain_dict = dict(env_cfg.terrain.terrain_dict)
