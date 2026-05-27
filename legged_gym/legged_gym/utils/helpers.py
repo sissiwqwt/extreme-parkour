@@ -164,6 +164,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.terrain.num_cols = args.cols
         if args.curriculum is not None:
             env_cfg.terrain.curriculum = args.curriculum
+        if args.task_targeted_curriculum is not None:
+            env_cfg.terrain.task_targeted_curriculum = args.task_targeted_curriculum
         if args.delay:
             env_cfg.domain_rand.action_delay = args.delay
         if not args.delay and not args.resume and not args.use_camera and args.headless: # if train from scratch
@@ -248,7 +250,8 @@ def get_args():
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
-        {"name": "--curriculum", "type": parse_bool, "default": None, "help": "Enable or disable terrain curriculum. Example: --curriculum False"}
+        {"name": "--curriculum", "type": parse_bool, "default": None, "help": "Enable or disable terrain curriculum. Example: --curriculum False"},
+        {"name": "--task_targeted_curriculum", "type": parse_bool, "default": None, "help": "Enable or disable task-targeted terrain curriculum. Example: --task_targeted_curriculum False"}
 
 
     ]
