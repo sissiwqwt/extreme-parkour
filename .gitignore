@@ -5,3 +5,4 @@ isaacgym*
 .codex
 *.mp4
 *.patch
+*.log

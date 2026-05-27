@@ -31,6 +31,7 @@
 import numpy as np
 import os
 import sys
+import json
 from datetime import datetime
 
 LOCAL_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
@@ -48,6 +49,32 @@ from legged_gym.utils import get_args, task_registry
 from shutil import copyfile
 import torch
 import wandb
+
+def _active_terrain_dict(terrain_dict):
+    return {name: float(weight) for name, weight in terrain_dict.items() if float(weight) > 0.0}
+
+def _terrain_run_summary(env_cfg):
+    terrain_cfg = env_cfg.terrain
+    return {
+        "terrain_dict": {name: float(weight) for name, weight in terrain_cfg.terrain_dict.items()},
+        "active_terrains": _active_terrain_dict(terrain_cfg.terrain_dict),
+        "curriculum": bool(terrain_cfg.curriculum),
+        "task_targeted_curriculum": bool(getattr(terrain_cfg, "task_targeted_curriculum", False)),
+        "num_rows": int(terrain_cfg.num_rows),
+        "num_cols": int(terrain_cfg.num_cols),
+        "max_init_terrain_level": int(terrain_cfg.max_init_terrain_level),
+        "difficulty_range": [0.0, 1.0],
+        "difficulty_formula": "terrain_level / (num_rows - 1)",
+    }
+
+def _print_terrain_run_summary(summary):
+    print("Terrain setup:")
+    print("  active terrains:", summary["active_terrains"])
+    print("  curriculum:", summary["curriculum"])
+    print("  task_targeted_curriculum:", summary["task_targeted_curriculum"])
+    print("  num_rows:", summary["num_rows"], "num_cols:", summary["num_cols"])
+    print("  max_init_terrain_level:", summary["max_init_terrain_level"])
+    print("  difficulty formula:", summary["difficulty_formula"])
 
 def train(args):
     args.headless = True
@@ -71,6 +98,11 @@ def train(args):
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
+    terrain_summary = _terrain_run_summary(env_cfg)
+    _print_terrain_run_summary(terrain_summary)
+    with open(os.path.join(log_pth, "terrain_summary.json"), "w") as f:
+        json.dump(terrain_summary, f, indent=2, sort_keys=True)
+    wandb.config.update(terrain_summary, allow_val_change=True)
     ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 
