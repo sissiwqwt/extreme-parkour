@@ -113,6 +113,19 @@ def _pop_script_argv():
         default=540,
         help="Third-person camera height (body mode uses depth sensor size).",
     )
+    difficulty_group = p.add_mutually_exclusive_group()
+    difficulty_group.add_argument(
+        "--terrain_level",
+        type=int,
+        default=None,
+        help="Fixed terrain row to play on. With the default 5 rows, valid values are 0..4.",
+    )
+    difficulty_group.add_argument(
+        "--terrain_difficulty",
+        type=float,
+        default=None,
+        help="Fixed normalized terrain difficulty in [0, 1]. Mapped to the nearest terrain row.",
+    )
     p.add_argument(
          "--use_gpu",
         action="store_true",
@@ -185,6 +198,35 @@ def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict):
         headless=args.headless,
     )
     return env, env_cfg
+
+
+def _requested_terrain_level(rec_cfg, num_rows):
+    if rec_cfg.terrain_level is not None:
+        if rec_cfg.terrain_level < 0 or rec_cfg.terrain_level >= num_rows:
+            raise ValueError(
+                f"--terrain_level must be in [0, {num_rows - 1}], got {rec_cfg.terrain_level}"
+            )
+        return rec_cfg.terrain_level
+
+    if rec_cfg.terrain_difficulty is not None:
+        if rec_cfg.terrain_difficulty < 0.0 or rec_cfg.terrain_difficulty > 1.0:
+            raise ValueError(
+                f"--terrain_difficulty must be in [0, 1], got {rec_cfg.terrain_difficulty}"
+            )
+        return int(round(rec_cfg.terrain_difficulty * (num_rows - 1)))
+
+    return None
+
+
+def _apply_fixed_terrain_level(env, terrain_level):
+    if terrain_level is None:
+        return
+
+    env.cfg.terrain.curriculum = False
+    env.terrain_levels[:] = int(terrain_level)
+    env._refresh_terrain_state()
+    env_ids = torch.arange(env.num_envs, device=env.device)
+    env.reset_idx(env_ids)
 
 
 def _rgba_to_bgr(rgba):
@@ -330,8 +372,14 @@ def play_headless_record(args, rec_cfg):
     }
     terrain_dict = dict(env_cfg.terrain.terrain_dict)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
-    env_cfg.terrain.curriculum = False
-    env_cfg.terrain.max_difficulty = True
+    terrain_level = _requested_terrain_level(rec_cfg, env_cfg.terrain.num_rows)
+    if terrain_level is None:
+        env_cfg.terrain.curriculum = False
+        env_cfg.terrain.max_difficulty = True
+    else:
+        env_cfg.terrain.curriculum = True
+        env_cfg.terrain.task_targeted_curriculum = False
+        env_cfg.terrain.max_init_terrain_level = terrain_level
 
     env_cfg.depth.angle = [0, 1]
     env_cfg.noise.add_noise = True
@@ -363,6 +411,7 @@ def play_headless_record(args, rec_cfg):
         env_cfg=env_cfg,
         terrain_dict=terrain_dict,
     )
+    _apply_fixed_terrain_level(env, terrain_level)
     obs = env.get_observations()
 
     if not env.cfg.depth.use_camera or not env.cam_handles:
@@ -466,6 +515,12 @@ def play_headless_record(args, rec_cfg):
     print(
         f"Recording env {rec_cfg.record_env} ({mode_desc}) → {video_path} @ {fps} FPS, {w}x{h}"
     )
+    if terrain_level is not None:
+        terrain_difficulty = terrain_level / max(env_cfg.terrain.num_rows - 1, 1)
+        print(
+            f"Using fixed terrain level {terrain_level}/{env_cfg.terrain.num_rows - 1} "
+            f"(difficulty {terrain_difficulty:.2f})."
+        )
 
     try:
         for _ in range(int(env.max_episode_length)):

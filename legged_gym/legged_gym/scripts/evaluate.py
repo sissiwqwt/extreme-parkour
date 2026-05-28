@@ -63,7 +63,7 @@ BASELINE_TERRAINS = {
 NEW_TERRAINS = {
     "alternating_step": 0.2,
     "beam_gap": 0.2,
-    "biased_gap": 0.2,
+    "asymmetric_gap": 0.2,
     "slanted_hurdle": 0.2,
     "parkour_v2": 0.2,
 }

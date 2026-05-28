@@ -52,6 +52,7 @@ class Terrain:
 
         cfg.terrain_proportions = np.array(cfg.terrain_proportions) / np.sum(cfg.terrain_proportions)
         self.proportions = [np.sum(cfg.terrain_proportions[:i+1]) for i in range(len(cfg.terrain_proportions))]
+        self.terrain_names = list(cfg.terrain_dict.keys()) if hasattr(cfg, "terrain_dict") else None
         self.cfg.num_sub_terrains = cfg.num_rows * cfg.num_cols
         self.env_origins = np.zeros((cfg.num_rows, cfg.num_cols, 3))
         self.terrain_type = np.zeros((cfg.num_rows, cfg.num_cols))
@@ -162,55 +163,43 @@ class Terrain:
         stone_distance = 0.05 if difficulty==0 else 0.1
         gap_size = 1. * difficulty
         pit_depth = 1. * difficulty
-        if choice < self.proportions[0]:
-            idx = 0
-            if choice < self.proportions[0]/ 2:
-                idx = 1
-                slope *= -1
+        idx = min(int(np.searchsorted(self.proportions, choice, side="right")), len(self.proportions) - 1)
+        terrain_name = self.terrain_names[idx] if self.terrain_names is not None else idx
+        if terrain_name == "smooth slope":
             terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)
             # self.add_roughness(terrain)
-        elif choice < self.proportions[2]:
-            idx = 2
-            if choice<self.proportions[1]:
-                idx = 3
+        elif terrain_name in ["rough slope up", "rough slope down"]:
+            if terrain_name == "rough slope down":
                 slope *= -1
             terrain_utils.pyramid_sloped_terrain(terrain, slope=slope, platform_size=3.)
             self.add_roughness(terrain)
-        elif choice < self.proportions[4]:
-            idx = 4
-            if choice<self.proportions[3]:
-                idx = 5
+        elif terrain_name in ["rough stairs up", "rough stairs down"]:
+            if terrain_name == "rough stairs down":
                 step_height *= -1
             terrain_utils.pyramid_stairs_terrain(terrain, step_width=0.31, step_height=step_height, platform_size=3.)
             self.add_roughness(terrain)
-        elif choice < self.proportions[5]:
-            idx = 6
+        elif terrain_name == "discrete":
             num_rectangles = 20
             rectangle_min_size = 0.5
             rectangle_max_size = 2.
             terrain_utils.discrete_obstacles_terrain(terrain, discrete_obstacles_height, rectangle_min_size, rectangle_max_size, num_rectangles, platform_size=3.)
             self.add_roughness(terrain)
-        elif choice < self.proportions[6]:
-            idx = 7
+        elif terrain_name == "stepping stones":
             stones_size = 1.5 - 1.2*difficulty
             # terrain_utils.stepping_stones_terrain(terrain, stone_size=stones_size, stone_distance=0.1, stone_distance_rand=0, max_height=0.04*difficulty, platform_size=2.)
             half_sloped_terrain(terrain, wall_width=4, start2center=0.5, max_height=0.00)
             stepping_stones_terrain(terrain, stone_size=1.5-0.2*difficulty, stone_distance=0.0+0.4*difficulty, max_height=0.2*difficulty, platform_size=1.2)
             self.add_roughness(terrain)
-        elif choice < self.proportions[7]:
-            idx = 8
+        elif terrain_name == "gaps":
             # gap_size = random.uniform(self.cfg.gap_size[0], self.cfg.gap_size[1])
             gap_parkour_terrain(terrain, difficulty, platform_size=4)
             self.add_roughness(terrain)
-        elif choice < self.proportions[8]:
-            idx = 9
+        elif terrain_name == "smooth flat":
             self.add_roughness(terrain)
             # pass
-        elif choice < self.proportions[9]:
-            idx = 10
+        elif terrain_name == "pit":
             pit_terrain(terrain, depth=pit_depth, platform_size=4.)
-        elif choice < self.proportions[10]:
-            idx = 11
+        elif terrain_name == "wall":
             if self.cfg.all_vertical:
                 half_slope_difficulty = 1.0
             else:
@@ -222,6 +211,7 @@ class Terrain:
                 elif difficulty < 0:
                     self.add_roughness(terrain)
                     terrain.slope_vector = np.array([1, 0., 0]).astype(np.float32)
+                    terrain.idx = idx
                     return terrain
                 else:
                     half_slope_difficulty = difficulty
@@ -236,20 +226,17 @@ class Terrain:
             top_mask = terrain.height_field_raw > max_height - 0.05
             self.add_roughness(terrain, difficulty=1)
             terrain.height_field_raw[top_mask] = max_height
-        elif choice < self.proportions[11]:
-            idx = 12
+        elif terrain_name == "platform":
             # half platform terrain
             half_platform_terrain(terrain, max_height=0.1 + 0.4 * difficulty )
             self.add_roughness(terrain, difficulty=1)
-        elif choice < self.proportions[13]:
-            idx = 13
+        elif terrain_name in ["large stairs up", "large stairs down"]:
             height = 0.1 + 0.3 * difficulty
-            if choice < self.proportions[12]:
-                idx = 14
+            if terrain_name == "large stairs down":
                 height *= -1
             terrain_utils.pyramid_stairs_terrain(terrain, step_width=1., step_height=height, platform_size=3.)
             self.add_roughness(terrain)
-        elif choice < self.proportions[14]:
+        elif terrain_name == "parkour":
             x_range = [-0.1, 0.1+0.3*difficulty]  # offset to stone_len
             y_range = [0.2, 0.3+0.1*difficulty]
             stone_len = [0.9 - 0.3*difficulty, 1 - 0.2*difficulty]#2 * round((0.6) / 2.0, 1)
@@ -265,11 +252,9 @@ class Terrain:
                             last_incline_height=last_incline_height,
                             pad_height=0,
                             pit_depth=[0.2, 1])
-            idx = 15
             # terrain.height_field_raw[:] = 0
             self.add_roughness(terrain)
-        elif choice < self.proportions[15]:
-            idx = 16
+        elif terrain_name == "parkour_hurdle":
             parkour_hurdle_terrain(terrain,
                                    num_stones=self.num_goals - 2,
                                    stone_len=0.1+0.3*difficulty,
@@ -281,8 +266,7 @@ class Terrain:
                                    )
             # terrain.height_field_raw[:] = 0
             self.add_roughness(terrain)
-        elif choice < self.proportions[16]:
-            idx = 17
+        elif terrain_name == "parkour_flat":
             parkour_hurdle_terrain(terrain,
                                    num_stones=self.num_goals - 2,
                                    stone_len=0.1+0.3*difficulty,
@@ -293,8 +277,7 @@ class Terrain:
                                    flat=True
                                    )
             self.add_roughness(terrain)
-        elif choice < self.proportions[17]:
-            idx = 18
+        elif terrain_name == "parkour_step":
             parkour_step_terrain(terrain,
                                    num_stones=self.num_goals - 2,
                                    step_height=0.1 + 0.35*difficulty,
@@ -304,8 +287,7 @@ class Terrain:
                                    pad_height=0,
                                    )
             self.add_roughness(terrain)
-        elif choice < self.proportions[18]:
-            idx = 19
+        elif terrain_name == "parkour_gap":
             parkour_gap_terrain(terrain,
                                 num_gaps=self.num_goals - 2,
                                 gap_size=0.1 + 0.7 * difficulty,
@@ -317,8 +299,7 @@ class Terrain:
                                 # flat=True
                                 )
             self.add_roughness(terrain)
-        elif choice < self.proportions[19]:
-            idx = 20
+        elif terrain_name == "alternating_step":
             alternating_step_terrain(terrain,
                                      platform_len=2.5,
                                      platform_height=0.0,
@@ -326,77 +307,100 @@ class Terrain:
                                      x_range=[0.35, 0.8],
                                      y_range=[-0.2, 0.2],
                                      half_valid_width=[0.45, 0.7],
-                                     step_height=0.1 + 0.2*difficulty,
+                                     step_height=0.1 + 0.3*difficulty,
                                      pad_width=0.1,
                                      pad_height=0.5)
             self.add_roughness(terrain)
-        elif choice < self.proportions[20]:
-            idx = 21
+        elif terrain_name in ["bean_gap", "beam_gap"]:
+            beam_gap_difficulty = np.clip(difficulty, 0.0, 1.0)
+            target_beam_width = 0.194 * 12.0 / 11.0
+            target_gap_size = 0.38 / 2.0
+            beam_width_range = [
+                0.4 + beam_gap_difficulty * (target_beam_width - 0.4),
+                0.8 + beam_gap_difficulty * (target_beam_width - 0.8),
+            ]
             beam_gap_terrain(terrain,
                              platform_len=2.5,
                              platform_height=0.0,
                              num_gaps=self.num_goals - 2,
-                             gap_size=0.2 + 0.2*difficulty,
+                             gap_size=0.25 + 0.55 * difficulty,
                              x_range=[1.0, 1.8],
-                             beam_width_range=[0.4, 0.8],
-                             y_offset_range=[-0.3, 0.3],
+                             beam_width_range=beam_width_range,
+                             y_offset_range=[-0.08, 0.08],
                              gap_depth=[0.2, 1.0],
                              pad_width=0.1,
                              pad_height=0.5)
             self.add_roughness(terrain)
-        elif choice < self.proportions[21]:
-            idx = 22
+        elif terrain_name in ["asymmetric_gap", "biased_gap"]:
+            asymmetric_gap_difficulty = np.clip(difficulty, 0.0, 1.0)
+            corridor_half_width = 0.6 - 0.1 * asymmetric_gap_difficulty
+            max_edge_distance = 0.38 * 1.5
+            target_lateral_offset = corridor_half_width + max_edge_distance / 2.0
+            lateral_offset = 0.25 + 0.45*difficulty
             biased_gap_terrain(terrain,
                                    platform_len=2.5,
                                    platform_height=0.0,
                                    num_gaps=self.num_goals - 2,
-                                   gap_size=0.25 + 0.15*difficulty,
+                                   gap_size=0.2 + 0.15*difficulty,
                                    x_range=[1.0, 1.6],
-                                   corridor_half_width=0.6,
-                                   lateral_offset=0.8,
+                                   corridor_half_width=corridor_half_width,
+                                   lateral_offset=lateral_offset,
                                    gap_depth=[0.2, 1.0],
                                    pad_width=0.1,
                                    pad_height=0.5)
             self.add_roughness(terrain)
-        elif choice < self.proportions[22]:
-            idx = 23
+        elif terrain_name == "parkour_v2":
             parkour_v2_terrain(terrain,
                                platform_len=2.5,
                                platform_height=0.0,
                                num_segments=min(int(5 + 3*difficulty), 10),
                                segment_x_range=[1.5, 2.8],
+                               difficulty=difficulty,
                                num_goals=self.num_goals,
                                pad_width=0.1,
                                pad_height=0.5)
             # parkour_v2_terrain already handles terrain setup, no need to add_roughness separately
-        elif choice < self.proportions[23]:
-            idx = 24
+        elif terrain_name == "narrow_gap":
+            narrow_gap_difficulty = np.clip(difficulty, 0.0, 1.0)
+            target_corridor_half_width = 0.194 * 12.0 / 11.0 / 2.0
+            corridor_half_width = [
+                0.24 + narrow_gap_difficulty * (target_corridor_half_width - 0.24),
+                0.32 + narrow_gap_difficulty * (target_corridor_half_width - 0.32),
+            ]
             alternating_lateral_terrain(terrain,
                                         platform_len=2.5,
                                         platform_height=0.0,
                                         num_segments=self.num_goals - 2,
                                         x_range=[0.8, 1.4],
-                                        corridor_half_width=[0.45, 0.7],
-                                        lateral_offset=0.6,
-                                        wall_height=0.18 + 0.12 * difficulty,
+                                        corridor_half_width=corridor_half_width,
+                                        lateral_offset=0.75,
+                                        wall_height=0.55 + 0.35 * difficulty,
                                         pad_width=0.1,
                                         pad_height=0.5)
+        elif terrain_name == "climbing_wall":
+            climbing_wall_difficulty = np.clip(difficulty, 0.0, 1.0)
+            target_hurdle_height = 0.25 * 1.8
+            hurdle_height_range = [
+                0.18 + climbing_wall_difficulty * (target_hurdle_height - 0.18),
+                0.28 + climbing_wall_difficulty * (target_hurdle_height - 0.28),
+            ]
+            hurdle_depth_range = [
+                0.45 + climbing_wall_difficulty * (0.18 - 0.45),
+                0.70 + climbing_wall_difficulty * (0.24 - 0.70),
+            ]
+            slanted_hurdle_terrain(terrain,
+                                   platform_len=2.5,
+                                   platform_height=0.0,
+                                   num_stones=self.num_goals - 2,
+                                   x_range=[0.8, 1.4],
+                                   y_range=self.cfg.y_range,
+                                   half_valid_width=[0.45, 0.8],
+                                   hurdle_height_range=hurdle_height_range,
+                                   hurdle_depth_range=hurdle_depth_range,
+                                   pad_width=0.1,
+                                   pad_height=0.5)
             self.add_roughness(terrain)
-        elif choice < self.proportions[24]:
-            idx = 25
-            cliff_side_terrain(terrain,
-                               platform_len=2.5,
-                               platform_height=0.0,
-                               num_segments=self.num_goals - 2,
-                               x_range=[0.8, 1.4],
-                               corridor_width_range=[1.0, 1.5],
-                               cliff_depth=[0.2, 0.6 + 0.4 * difficulty],
-                               add_obstacles=True,
-                               pad_width=0.1,
-                               pad_height=0.5)
-            self.add_roughness(terrain)
-        elif choice < self.proportions[25]:
-            idx = 27
+        elif terrain_name == "slanted_hurdle":
             slanted_hurdle_terrain(terrain,
                                    platform_len=2.5,
                                    platform_height=0.0,
@@ -409,12 +413,10 @@ class Terrain:
                                    pad_width=0.1,
                                    pad_height=0.5)
             self.add_roughness(terrain)
-        elif choice < self.proportions[26]:
-            idx = 26
+        elif terrain_name == "demo":
             demo_terrain(terrain)
             self.add_roughness(terrain)
         else:
-            idx = 0
             terrain_utils.pyramid_sloped_terrain(terrain, slope=0.0, platform_size=3.)
         # np.set_printoptions(precision=2)
         # print(np.array(self.proportions), choice)
@@ -973,7 +975,7 @@ def beam_gap_terrain(
         gap_size=0.28,
         x_range=[1.0, 1.6],
         beam_width_range=[0.5, 0.8],
-        y_offset_range=[-0.3, 0.3],
+        y_offset_range=[-0.08, 0.08],
         gap_depth=[0.2, 1.0],
         pad_width=0.1,
         pad_height=0.5):
@@ -986,16 +988,20 @@ def beam_gap_terrain(
 
     platform_len = round(platform_len / terrain.horizontal_scale)
     platform_height = round(platform_height / terrain.vertical_scale)
+    beam_width = np.random.uniform(beam_width_range[0], beam_width_range[1])
     gap_size = round(gap_size / terrain.horizontal_scale)
     gap_depth = -round(np.random.uniform(gap_depth[0], gap_depth[1]) / terrain.vertical_scale)
 
     dis_x_min = round(x_range[0] / terrain.horizontal_scale) + gap_size
     dis_x_max = round(x_range[1] / terrain.horizontal_scale) + gap_size
-    beam_half_width = round(np.random.uniform(beam_width_range[0], beam_width_range[1]) / terrain.horizontal_scale / 2)
+    beam_width = max(round(beam_width / terrain.horizontal_scale), 1)
+    beam_half_width = beam_width // 2
 
     terrain.height_field_raw[:, :] = gap_depth
     terrain.height_field_raw[0:platform_len, :] = platform_height
-    terrain.height_field_raw[0:platform_len, mid_y - beam_half_width:mid_y + beam_half_width] = platform_height
+    beam_start = mid_y - beam_half_width
+    beam_end = beam_start + beam_width
+    terrain.height_field_raw[0:platform_len, beam_start:beam_end] = platform_height
 
     dis_x = platform_len
     goals[0] = [platform_len - 1, mid_y]
@@ -1006,15 +1012,17 @@ def beam_gap_terrain(
         rand_y = round(np.random.uniform(y_offset_range[0], y_offset_range[1]) / terrain.horizontal_scale)
         dis_x += rand_x
 
-        beam_center = int(np.clip(mid_y + rand_y, beam_half_width + 1, terrain.length - beam_half_width - 1))
+        beam_center = int(np.clip(mid_y + rand_y, beam_half_width + 1, terrain.length - (beam_width - beam_half_width) - 1))
         last_beam_center = beam_center
+        beam_start = beam_center - beam_half_width
+        beam_end = beam_start + beam_width
 
         last_safe_x = max(dis_x - rand_x, 0)
-        terrain.height_field_raw[last_safe_x:dis_x, beam_center - beam_half_width:beam_center + beam_half_width] = platform_height
+        terrain.height_field_raw[last_safe_x:dis_x, beam_start:beam_end] = platform_height
 
         gap_start = max(dis_x - gap_size // 2, 0)
-        gap_end = min(dis_x + gap_size // 2, terrain.width)
-        terrain.height_field_raw[gap_start:gap_end, beam_center - beam_half_width:beam_center + beam_half_width] = gap_depth
+        gap_end = min(gap_start + gap_size, terrain.width)
+        terrain.height_field_raw[gap_start:gap_end, beam_start:beam_end] = gap_depth
 
         goals[i + 1] = [dis_x - rand_x // 2, beam_center]
 
@@ -1022,7 +1030,9 @@ def beam_gap_terrain(
     if final_dis_x > terrain.width:
         final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
 
-    terrain.height_field_raw[dis_x:final_dis_x, last_beam_center - beam_half_width:last_beam_center + beam_half_width] = platform_height
+    beam_start = last_beam_center - beam_half_width
+    beam_end = beam_start + beam_width
+    terrain.height_field_raw[dis_x:final_dis_x, beam_start:beam_end] = platform_height
     goals[-1] = [(dis_x + final_dis_x) / 2, last_beam_center]
 
     terrain.goals = goals * terrain.horizontal_scale
@@ -1068,7 +1078,7 @@ def biased_gap_terrain(
 
     dis_x = platform_len
     last_dis_x = dis_x
-    goals[0] = [platform_len - 1, mid_y]
+    goals[0] = [platform_len / 2, mid_y]
 
     for i in range(num_gaps):
         rand_x = np.random.randint(dis_x_min, dis_x_max)
@@ -1077,7 +1087,7 @@ def biased_gap_terrain(
         # 相邻平台完全交替错开：左-右-左-右...
         sign = 1 if i % 2 == 0 else -1
         center_y = int(round(np.clip(
-            mid_y + sign * lateral_offset * random.random() * 0.2,
+            mid_y + sign * lateral_offset,
             corridor_half_width + 1,
             terrain.length - corridor_half_width - 1,
         )))
@@ -1125,48 +1135,73 @@ def alternating_lateral_terrain(
         pad_height=0.5):
     """
     交替侧跳赛道：
-    每一段只留一个可通行走廊，并强制走廊左右交替偏移。
-    可理解为“S型/左右摆动可行通道”的离散版本。
+    多个方形凹坑左右交替分布，相邻凹坑仅由狭窄斜向走廊连接。
     """
     goals = np.zeros((num_segments + 2, 2))
     mid_y = terrain.length // 2
 
-    terrain.height_field_raw[:, :] = 0
-
     platform_len = round(platform_len / terrain.horizontal_scale)
     platform_height = round(platform_height / terrain.vertical_scale)
-    terrain.height_field_raw[0:platform_len, :] = platform_height
 
     dis_x_min = round(x_range[0] / terrain.horizontal_scale)
     dis_x_max = round(x_range[1] / terrain.horizontal_scale)
-    corridor_half_width = round(np.random.uniform(corridor_half_width[0], corridor_half_width[1]) / terrain.horizontal_scale)
+    corridor_width = max(round(np.random.uniform(corridor_half_width[0], corridor_half_width[1]) * 2 / terrain.horizontal_scale), 1)
+    corridor_half_width = corridor_width // 2
     lateral_offset = round(lateral_offset / terrain.horizontal_scale)
     wall_height = round(wall_height / terrain.vertical_scale)
+    pit_half_size = max(round(0.45 / terrain.horizontal_scale), corridor_half_width * 3)
+
+    terrain.height_field_raw[:, :] = wall_height
+    terrain.height_field_raw[0:platform_len, :] = platform_height
+
+    def carve_square(center_x, center_y, half_size):
+        x0 = max(center_x - half_size, 0)
+        x1 = min(center_x + half_size + 1, terrain.width)
+        y0 = max(center_y - half_size, 0)
+        y1 = min(center_y + half_size + 1, terrain.length)
+        terrain.height_field_raw[x0:x1, y0:y1] = platform_height
+
+    def carve_diagonal_corridor(start_x, start_y, end_x, end_y):
+        num_points = max(abs(end_x - start_x), abs(end_y - start_y), 1) + 1
+        xs = np.linspace(start_x, end_x, num_points).round().astype(int)
+        ys = np.linspace(start_y, end_y, num_points).round().astype(int)
+        for x, y in zip(xs, ys):
+            x0 = max(x - corridor_half_width, 0)
+            x1 = min(x0 + corridor_width, terrain.width)
+            y0 = max(y - corridor_half_width, 0)
+            y1 = min(y0 + corridor_width, terrain.length)
+            terrain.height_field_raw[x0:x1, y0:y1] = platform_height
 
     dis_x = platform_len
     last_dis_x = dis_x
-    goals[0] = [platform_len - 1, mid_y]
+    goals[0] = [platform_len // 2, mid_y]
+    last_center_x = platform_len - 1
+    last_center_y = mid_y
 
     for i in range(num_segments):
         rand_x = np.random.randint(dis_x_min, dis_x_max)
         sign = 1 if i % 2 == 0 else -1
-        center_y = int(round(np.clip(
+        target_center_y = int(round(np.clip(
             mid_y + sign * lateral_offset,
             corridor_half_width + 1,
             terrain.length - corridor_half_width - 1,
         )))
 
-        terrain.height_field_raw[last_dis_x:last_dis_x + rand_x, :] = wall_height
-        terrain.height_field_raw[last_dis_x:last_dis_x + rand_x,
-                                 center_y - corridor_half_width:center_y + corridor_half_width] = 0
+        pit_center_x = min(last_dis_x + rand_x, terrain.width - pit_half_size - 1)
+        carve_diagonal_corridor(last_center_x, last_center_y, pit_center_x, target_center_y)
+        carve_square(pit_center_x, target_center_y, pit_half_size)
 
-        dis_x += rand_x
-        goals[i + 1] = [last_dis_x + rand_x // 2, center_y]
+        dis_x = pit_center_x
+        goals[i + 1] = [pit_center_x, target_center_y]
         last_dis_x = dis_x
+        last_center_x = pit_center_x
+        last_center_y = target_center_y
 
     final_dis_x = dis_x + np.random.randint(dis_x_min, dis_x_max)
-    if final_dis_x > terrain.width:
-        final_dis_x = terrain.width - round(0.5 / terrain.horizontal_scale)
+    if final_dis_x > terrain.width - pit_half_size - 1:
+        final_dis_x = terrain.width - pit_half_size - 1
+    carve_diagonal_corridor(last_center_x, last_center_y, final_dis_x, mid_y)
+    carve_square(final_dis_x, mid_y, pit_half_size)
     goals[-1] = [final_dis_x, mid_y]
 
     terrain.goals = goals * terrain.horizontal_scale
@@ -1276,6 +1311,7 @@ def parkour_v2_terrain(
         platform_height=0.0,
         num_segments=6,
         segment_x_range=[1.5, 2.8],
+        difficulty=0.0,
         num_goals=8,
         pad_width=0.1,
         pad_height=0.5):
@@ -1286,12 +1322,14 @@ def parkour_v2_terrain(
       - alternating_step
       - beam_gap
       - biased_gap
+      - narrow_gap
 
     注意：
     这里采用“在同一个高度图上按段拼接”的写法，而不是递归调用别的 terrain 函数，
     避免这些函数各自把整张图重置掉。
     """
     terrain.height_field_raw[:, :] = 0
+    difficulty = np.clip(difficulty, 0.0, 1.0)
 
     mid_y = terrain.length // 2
     platform_len_px = round(platform_len / terrain.horizontal_scale)
@@ -1302,13 +1340,33 @@ def parkour_v2_terrain(
     cur_x = platform_len_px
 
     gap_depth = -round(np.random.uniform(0.25, 1.0) / terrain.vertical_scale)
+    target_hurdle_height = 0.25 * 1.8
+    hurdle_height_range = [
+        0.18 + difficulty * (target_hurdle_height - 0.18),
+        0.28 + difficulty * (target_hurdle_height - 0.28),
+    ]
+    hurdle_depth_range = [
+        0.45 + difficulty * (0.18 - 0.45),
+        0.70 + difficulty * (0.24 - 0.70),
+    ]
+    target_beam_width = 0.194 * 12.0 / 11.0
+    beam_width_range = [
+        0.4 + difficulty * (target_beam_width - 0.4),
+        0.8 + difficulty * (target_beam_width - 0.8),
+    ]
+    beam_gap_size = 0.25 + difficulty * 0.55
+    target_corridor_half_width = 0.194 * 12.0 / 11.0 / 2.0
+    narrow_corridor_half_width = np.random.uniform(
+        0.24 + difficulty * (target_corridor_half_width - 0.24),
+        0.32 + difficulty * (target_corridor_half_width - 0.32),
+    )
 
     for seg_id in range(num_segments):
         seg_len = round(np.random.uniform(segment_x_range[0], segment_x_range[1]) / terrain.horizontal_scale)
         if cur_x + seg_len >= terrain.width - round(1.0 / terrain.horizontal_scale):
             break
 
-        seg_type = np.random.choice(["slanted_hurdle", "alternating_step", "beam_gap", "biased_gap"])
+        seg_type = np.random.choice(["slanted_hurdle", "alternating_step", "beam_gap", "biased_gap", "narrow_gap"])
 
         start_x = cur_x
         end_x = min(cur_x + seg_len, terrain.width)
@@ -1339,8 +1397,8 @@ def parkour_v2_terrain(
                 if dis_x >= end_x:
                     break
                 
-                hurdle_depth = max(round(np.random.uniform(0.35, 0.7) / terrain.horizontal_scale), 2)
-                hurdle_height = round(np.random.uniform(0.12, 0.25) / terrain.vertical_scale)
+                hurdle_depth = max(round(np.random.uniform(hurdle_depth_range[0], hurdle_depth_range[1]) / terrain.horizontal_scale), 2)
+                hurdle_height = round(np.random.uniform(hurdle_height_range[0], hurdle_height_range[1]) / terrain.vertical_scale)
                 
                 obs_x0 = max(dis_x - hurdle_depth // 2, start_x)
                 obs_x1 = min(dis_x + hurdle_depth // 2, end_x)
@@ -1376,28 +1434,29 @@ def parkour_v2_terrain(
             goals.append([start_x + seg_len - 3, center_y])
 
         elif seg_type == "beam_gap":
-            beam_half_width = round(np.random.uniform(0.25, 0.4) / terrain.horizontal_scale)
+            beam_width = max(round(np.random.uniform(beam_width_range[0], beam_width_range[1]) / terrain.horizontal_scale), 1)
+            beam_half_width = beam_width // 2
             beam_center = int(np.clip(
                 mid_y + np.random.randint(
-                    round(-0.3 / terrain.horizontal_scale),
-                    round(0.3 / terrain.horizontal_scale) + 1
+                    round(-0.08 / terrain.horizontal_scale),
+                    round(0.08 / terrain.horizontal_scale) + 1
                 ),
                 beam_half_width + 1,
-                terrain.length - beam_half_width - 1,
+                terrain.length - (beam_width - beam_half_width) - 1,
             ))
+            beam_start = beam_center - beam_half_width
+            beam_end = beam_start + beam_width
             terrain.height_field_raw[start_x:end_x, :] = gap_depth
-            terrain.height_field_raw[start_x:end_x,
-                                     beam_center - beam_half_width:beam_center + beam_half_width] = 0
+            terrain.height_field_raw[start_x:end_x, beam_start:beam_end] = 0
 
             num_local = np.random.randint(1, 3)
             gaps = []
             for _ in range(num_local):
-                gap_w = round(np.random.uniform(0.2, 0.35) / terrain.horizontal_scale)
+                gap_w = round(beam_gap_size / terrain.horizontal_scale)
                 gx = np.random.randint(start_x + gap_w, end_x - gap_w) if end_x - start_x > 2 * gap_w else start_x + (end_x - start_x) // 2
                 gap_x0 = max(gx - gap_w // 2, start_x)
-                gap_x1 = min(gx + gap_w // 2, end_x)
-                terrain.height_field_raw[gap_x0:gap_x1,
-                                         beam_center - beam_half_width:beam_center + beam_half_width] = gap_depth
+                gap_x1 = min(gap_x0 + gap_w, end_x)
+                terrain.height_field_raw[gap_x0:gap_x1, beam_start:beam_end] = gap_depth
                 gaps.append((gap_x0, gap_x1))
 
             safe_start = start_x
@@ -1412,8 +1471,13 @@ def parkour_v2_terrain(
             # 在一个segment内放置3个相邻的小平台，左右交替错开
             num_platforms = 3
             platform_size = seg_len // num_platforms
-            corridor_half_width = round(0.6 / terrain.horizontal_scale)
-            lateral_offset = round(0.8 / terrain.horizontal_scale)
+            corridor_half_width_m = 0.6 - 0.1 * difficulty
+            max_edge_distance = 0.38 * 1.5
+            target_lateral_offset_m = corridor_half_width_m + max_edge_distance / 2.0
+            lateral_offset_m = 0.25 + 0.4 *difficulty
+            corridor_half_width = round(corridor_half_width_m / terrain.horizontal_scale)
+            lateral_offset = round(lateral_offset_m / terrain.horizontal_scale)
+            local_gap_size = round((0.2 + 0.15 * difficulty) / terrain.horizontal_scale)
             
             for plat_id in range(num_platforms):
                 # 每个平台的位置
@@ -1432,6 +1496,55 @@ def parkour_v2_terrain(
                 terrain.height_field_raw[plat_start:plat_end, :max(center_y - corridor_half_width, 0)] = gap_depth
                 terrain.height_field_raw[plat_start:plat_end, min(center_y + corridor_half_width, terrain.length):] = gap_depth
                 goals.append([plat_start + (plat_end - plat_start) // 2, center_y])
+                if plat_id < num_platforms - 1:
+                    gap_x0 = max(plat_end - local_gap_size // 2, start_x)
+                    gap_x1 = min(gap_x0 + local_gap_size, end_x)
+                    terrain.height_field_raw[gap_x0:gap_x1, :] = gap_depth
+
+        elif seg_type == "narrow_gap":
+            corridor_width = max(round(narrow_corridor_half_width * 2 / terrain.horizontal_scale), 1)
+            corridor_half_width = corridor_width // 2
+            lateral_offset = round(0.75 / terrain.horizontal_scale)
+            wall_height = round((0.55 + 0.35 * difficulty) / terrain.vertical_scale)
+            pit_half_size = max(round(0.45 / terrain.horizontal_scale), corridor_half_width * 3)
+
+            def carve_square(center_x, center_y):
+                x0 = max(center_x - pit_half_size, start_x)
+                x1 = min(center_x + pit_half_size + 1, end_x)
+                y0 = max(center_y - pit_half_size, 0)
+                y1 = min(center_y + pit_half_size + 1, terrain.length)
+                terrain.height_field_raw[x0:x1, y0:y1] = platform_height_px
+
+            def carve_diagonal_corridor(x0, y0, x1, y1):
+                num_points = max(abs(x1 - x0), abs(y1 - y0), 1) + 1
+                xs = np.linspace(x0, x1, num_points).round().astype(int)
+                ys = np.linspace(y0, y1, num_points).round().astype(int)
+                for x, y in zip(xs, ys):
+                    cx0 = max(x - corridor_half_width, start_x)
+                    cx1 = min(cx0 + corridor_width, end_x)
+                    cy0 = max(y - corridor_half_width, 0)
+                    cy1 = min(cy0 + corridor_width, terrain.length)
+                    terrain.height_field_raw[cx0:cx1, cy0:cy1] = platform_height_px
+
+            terrain.height_field_raw[start_x:end_x, :] = wall_height
+            pit_centers = []
+            for pit_id in range(2):
+                sign = 1 if pit_id % 2 == 0 else -1
+                center_x = start_x + (pit_id + 1) * seg_len // 3
+                center_y = int(round(np.clip(
+                    mid_y + sign * lateral_offset,
+                    pit_half_size + 1,
+                    terrain.length - pit_half_size - 1,
+                )))
+                pit_centers.append((center_x, center_y))
+
+            prev_x, prev_y = start_x, mid_y
+            for center_x, center_y in pit_centers:
+                carve_diagonal_corridor(prev_x, prev_y, center_x, center_y)
+                carve_square(center_x, center_y)
+                goals.append([center_x, center_y])
+                prev_x, prev_y = center_x, center_y
+            carve_diagonal_corridor(prev_x, prev_y, end_x - 1, mid_y)
 
         cur_x = end_x
         

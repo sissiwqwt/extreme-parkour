@@ -60,12 +60,33 @@ BASELINE_TERRAINS = {
     "parkour_gap": 0.25,
 }
 
-NEW_TERRAINS = {
+DESIGN_NEW_TERRAINS = {
     "alternating_step": 0.2,
     "beam_gap": 0.2,
-    "biased_gap": 0.2,
+    "asymmetric_gap": 0.2,
     "slanted_hurdle": 0.2,
     "parkour_v2": 0.2,
+}
+
+CURRENT_NEW_TERRAINS = {
+    "alternating_step": 1.0,
+    "beam_gap": 1.0,
+    "asymmetric_gap": 1.0,
+    "parkour_v2": 1.0,
+    "narrow_gap": 1.0,
+    "climbing_wall": 1.0,
+    "slanted_hurdle": 1.0,
+}
+
+TERRAIN_SETS = {
+    "baseline": BASELINE_TERRAINS,
+    "design_new": DESIGN_NEW_TERRAINS,
+    "new": CURRENT_NEW_TERRAINS,
+}
+
+TERRAIN_ALIASES = {
+    "biased_gap": "asymmetric_gap",
+    "bean_gap": "beam_gap",
 }
 
 
@@ -75,7 +96,15 @@ def _pop_eval_argv():
     parser.add_argument("--eval_episodes", type=int, default=256)
     parser.add_argument("--eval_max_steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
-    parser.add_argument("--terrain_set", choices=("baseline", "new", "all"), default="all")
+    parser.add_argument(
+        "--terrain_set",
+        choices=("baseline", "design_new", "new", "all"),
+        default="all",
+        help=(
+            "baseline uses original parkour terrains; design_new follows "
+            "experiment_design.md; new uses all current custom terrain.py terrains."
+        ),
+    )
     parser.add_argument(
         "--terrain_names",
         type=str,
@@ -115,12 +144,29 @@ def _zeroed_terrain_dict(env_cfg):
 
 def _canonical_terrain_name(name, env_cfg):
     name = name.strip()
+    name = TERRAIN_ALIASES.get(name, name)
     if name not in env_cfg.terrain.terrain_dict:
         raise ValueError(
             f"Unknown terrain '{name}'. "
             f"Available: {sorted(env_cfg.terrain.terrain_dict.keys())}"
         )
     return name
+
+
+def _normalize_weights(terrain_weights):
+    total = sum(float(weight) for weight in terrain_weights.values())
+    if total <= 0:
+        raise ValueError("Evaluation terrain weights must sum to a positive value.")
+    return {name: float(weight) / total for name, weight in terrain_weights.items()}
+
+
+def _selected_terrain_weights(terrain_set):
+    if terrain_set == "all":
+        selected = {}
+        selected.update(BASELINE_TERRAINS)
+        selected.update(CURRENT_NEW_TERRAINS)
+        return selected
+    return dict(TERRAIN_SETS[terrain_set])
 
 
 def _terrain_name_map(env_cfg):
@@ -158,18 +204,15 @@ def _configure_eval_env(env_cfg, eval_cfg):
     terrain_dict = _zeroed_terrain_dict(env_cfg)
     if eval_cfg.terrain_names:
         names = [n for n in eval_cfg.terrain_names.split(",") if n.strip()]
+        if not names:
+            raise ValueError("--terrain_names was provided but no terrain names were parsed.")
         weight = 1.0 / len(names)
         for name in names:
             terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight
     else:
-        selected = {}
-        if eval_cfg.terrain_set in ("baseline", "all"):
-            selected.update(BASELINE_TERRAINS)
-        if eval_cfg.terrain_set in ("new", "all"):
-            selected.update(NEW_TERRAINS)
-        total = sum(selected.values())
+        selected = _normalize_weights(_selected_terrain_weights(eval_cfg.terrain_set))
         for name, weight in selected.items():
-            terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight / total
+            terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight
 
     env_cfg.terrain.terrain_dict = terrain_dict
     env_cfg.terrain.terrain_proportions = list(terrain_dict.values())
