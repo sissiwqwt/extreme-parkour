@@ -40,6 +40,7 @@ CSV_FIELDS = [
     "terrain_name",
     "terrain_type",
     "terrain_level",
+    "difficulty",
     "start_x",
     "final_x",
     "mxd",
@@ -66,6 +67,21 @@ TERRAIN_CSV_FIELDS = [
     "mean_edge_violation",
     "mean_heading_loss",
 ]
+
+DIFFICULTY_CSV_FIELDS = [
+    "difficulty",
+    "episodes",
+    "success_rate",
+    "fall_rate",
+    "stuck_rate",
+    "mean_mxd",
+    "mean_normalized_waypoints",
+    "mean_episode_length",
+    "mean_edge_violation",
+    "mean_heading_loss",
+]
+
+ALL_DIFFICULTIES = tuple(round(0.1 * i, 1) for i in range(1, 11))
 
 EFFECTIVE_TERRAINS = {
     "parkour": 1.0,
@@ -178,6 +194,16 @@ def _pop_eval_argv():
     parser.add_argument("--add_noise", type=parse_bool, default=True)
     parser.add_argument("--max_difficulty", type=parse_bool, default=True)
     parser.add_argument(
+        "--difficulty_mode",
+        choices=("single", "all-difficulty", "all-cifficulty"),
+        default="single",
+        help=(
+            "single keeps the existing --max_difficulty behavior; "
+            "all-difficulty evaluates fixed terrain difficulties 0.1 through 1.0 "
+            "in one run. all-cifficulty is accepted as a backward-compatible alias."
+        ),
+    )
+    parser.add_argument(
         "--policy_type",
         choices=("auto", "base", "depth"),
         default="auto",
@@ -243,6 +269,43 @@ def _selected_terrain_weights(terrain_set, env_cfg):
     return dict(TERRAIN_SETS[terrain_set])
 
 
+def _all_difficulty_mode(eval_cfg):
+    return eval_cfg.difficulty_mode in ("all-difficulty", "all-cifficulty")
+
+
+def _difficulty_from_level(level, eval_cfg):
+    if not _all_difficulty_mode(eval_cfg):
+        return ""
+    if 0 <= level < len(ALL_DIFFICULTIES):
+        return ALL_DIFFICULTIES[level]
+    return ""
+
+
+def _install_all_difficulty_curriculum(env_cfg):
+    env_cfg.terrain.eval_all_difficulties = list(ALL_DIFFICULTIES)
+
+    from legged_gym.utils import terrain as terrain_module
+
+    if getattr(terrain_module.Terrain.curiculum, "_eval_all_difficulty_patch", False):
+        return
+
+    original_curiculum = terrain_module.Terrain.curiculum
+
+    def eval_curiculum(self, random=False, max_difficulty=False):
+        difficulties = getattr(self.cfg, "eval_all_difficulties", None)
+        if difficulties is None:
+            return original_curiculum(self, random=random, max_difficulty=max_difficulty)
+
+        for j in range(self.cfg.num_cols):
+            for i in range(self.cfg.num_rows):
+                choice = j / self.cfg.num_cols + 0.001
+                terrain = self.make_terrain(choice, float(difficulties[i]))
+                self.add_terrain_to_map(terrain, i, j)
+
+    eval_curiculum._eval_all_difficulty_patch = True
+    terrain_module.Terrain.curiculum = eval_curiculum
+
+
 def _terrain_name_map(env_cfg):
     proportions = np.asarray(env_cfg.terrain.terrain_proportions, dtype=np.float64)
     if proportions.sum() <= 0:
@@ -262,7 +325,11 @@ def _terrain_name_map(env_cfg):
 def _configure_eval_env(env_cfg, eval_cfg):
     env_cfg.env.episode_length_s = eval_cfg.episode_length_s
     env_cfg.commands.resampling_time = eval_cfg.episode_length_s
-    env_cfg.terrain.num_rows = 5
+    if _all_difficulty_mode(eval_cfg):
+        env_cfg.terrain.num_rows = len(ALL_DIFFICULTIES)
+        _install_all_difficulty_curriculum(env_cfg)
+    else:
+        env_cfg.terrain.num_rows = 5
     env_cfg.terrain.num_cols = max(5, env_cfg.terrain.num_cols)
     env_cfg.terrain.height = [0.02, 0.02]
     env_cfg.terrain.curriculum = False
@@ -473,13 +540,18 @@ def evaluate(args, eval_cfg):
         LEGGED_GYM_ROOT_DIR, "logs", "evaluation"
     )
     os.makedirs(output_dir, exist_ok=True)
-    basename = (
-        f"{_safe_filename(policy_type)}_"
-        f"{_safe_filename(eval_cfg.terrain_set)}_"
-        f"{_safe_filename(checkpoint)}"
-    )
+    basename_parts = [policy_type, eval_cfg.terrain_set]
+    if _all_difficulty_mode(eval_cfg):
+        basename_parts.append("all-difficulty")
+    basename_parts.append(checkpoint)
+    basename = "_".join(_safe_filename(part) for part in basename_parts)
     csv_path = os.path.join(output_dir, basename + ".csv")
     terrain_csv_path = os.path.join(output_dir, basename + "_by_terrain.csv")
+    difficulty_csv_path = (
+        os.path.join(output_dir, basename + "_by_difficulty.csv")
+        if _all_difficulty_mode(eval_cfg)
+        else None
+    )
     json_path = os.path.join(output_dir, basename + ".json")
 
     terrain_lookup = _terrain_name_map(env_cfg)
@@ -551,6 +623,7 @@ def evaluate(args, eval_cfg):
                     / max(heading_loss_count[env_id].item(), 1.0)
                 )
                 terrain_col = int(env._eval_terminal_col[env_id].item())
+                terrain_level = int(env._eval_terminal_level[env_id].item())
                 terrain_name = terrain_lookup.get(terrain_col, f"col_{terrain_col}")
 
                 rows.append(
@@ -561,7 +634,8 @@ def evaluate(args, eval_cfg):
                         "env_id": int(env_id),
                         "terrain_name": terrain_name,
                         "terrain_type": int(env._eval_terminal_class[env_id].item()),
-                        "terrain_level": int(env._eval_terminal_level[env_id].item()),
+                        "terrain_level": terrain_level,
+                        "difficulty": _difficulty_from_level(terrain_level, eval_cfg),
                         "start_x": sx,
                         "final_x": final_x,
                         "mxd": mxd,
@@ -600,6 +674,7 @@ def evaluate(args, eval_cfg):
         rows,
         csv_path,
         terrain_csv_path,
+        difficulty_csv_path,
         resolved_log_pth,
         env_cfg,
         eval_cfg,
@@ -609,12 +684,19 @@ def evaluate(args, eval_cfg):
         writer = csv.DictWriter(f, fieldnames=TERRAIN_CSV_FIELDS)
         writer.writeheader()
         writer.writerows(_terrain_summary_rows(summary["terrain_metrics"]))
+    if difficulty_csv_path is not None:
+        with open(difficulty_csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=DIFFICULTY_CSV_FIELDS)
+            writer.writeheader()
+            writer.writerows(_difficulty_summary_rows(summary["difficulty_metrics"]))
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
 
     print(json.dumps(summary["metrics"], indent=2))
     print(f"Wrote CSV: {csv_path}")
     print(f"Wrote terrain CSV: {terrain_csv_path}")
+    if difficulty_csv_path is not None:
+        print(f"Wrote difficulty CSV: {difficulty_csv_path}")
     print(f"Wrote JSON: {json_path}")
 
 
@@ -643,7 +725,25 @@ def _terrain_summary_rows(terrain_metrics):
     ]
 
 
-def _summarize(rows, csv_path, terrain_csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type):
+def _difficulty_summary_rows(difficulty_metrics):
+    return [
+        {"difficulty": difficulty, **metrics}
+        for difficulty, metrics in sorted(
+            difficulty_metrics.items(), key=lambda item: float(item[0])
+        )
+    ]
+
+
+def _summarize(
+    rows,
+    csv_path,
+    terrain_csv_path,
+    difficulty_csv_path,
+    resolved_log_pth,
+    env_cfg,
+    eval_cfg,
+    policy_type,
+):
     metrics = {
         "episodes": len(rows),
         "success_rate": float(np.mean([r["success"] for r in rows])) if rows else 0.0,
@@ -674,17 +774,31 @@ def _summarize(rows, csv_path, terrain_csv_path, resolved_log_pth, env_cfg, eval
         if name not in terrain_metrics:
             terrain_metrics[name] = _make_terrain_metrics(group)
 
+    difficulty_metrics = {}
+    if _all_difficulty_mode(eval_cfg):
+        by_difficulty = defaultdict(list)
+        for row in rows:
+            by_difficulty[str(row["difficulty"])].append(row)
+        for difficulty in ALL_DIFFICULTIES:
+            difficulty_metrics[str(difficulty)] = _make_terrain_metrics(
+                by_difficulty.get(str(difficulty), [])
+            )
+
     return {
         "csv_path": csv_path,
         "terrain_csv_path": terrain_csv_path,
+        "difficulty_csv_path": difficulty_csv_path,
         "resolved_log_path": resolved_log_pth,
         "policy_type": policy_type,
         "terrain_dict": env_cfg.terrain.terrain_dict,
+        "difficulty_mode": eval_cfg.difficulty_mode,
+        "all_difficulties": list(ALL_DIFFICULTIES) if _all_difficulty_mode(eval_cfg) else [],
         "success_threshold": eval_cfg.success_threshold,
         "stuck_window_s": eval_cfg.stuck_window_s,
         "stuck_threshold_m": eval_cfg.stuck_threshold_m,
         "metrics": metrics,
         "terrain_metrics": terrain_metrics,
+        "difficulty_metrics": difficulty_metrics,
     }
 
 
