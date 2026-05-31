@@ -391,6 +391,13 @@ class LeggedRobotCfgPPO(BaseConfig):
         hidden_dims = 512
         learning_rate = 1.e-3
         num_steps_per_env = LeggedRobotCfg.depth.update_interval * 24
+        action_loss_use_weight = True
+        action_loss_weight_alpha = 1.0
+        action_loss_weight_min = 1.0
+        action_loss_weight_max = 3.0
+        near_failure_roll_pitch_limit = 1.5
+        near_failure_height_target = None # if None, will use base_height_target from rewards
+        near_failure_height_cutoff = -0.25
 
     class estimator:
         train_with_estimated_states = True

@@ -322,9 +322,14 @@ class PPO:
             self.depth_encoder_optimizer.step()
             return depth_encoder_loss.item()
     
-    def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch):
+    def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch, action_weight_batch=None):
         if self.if_depth:
-            depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
+            action_loss = (actions_teacher_batch.detach() - actions_student_batch).pow(2).sum(dim=1)
+            if action_weight_batch is not None:
+                action_weight_batch = action_weight_batch.detach().to(action_loss.device).view(-1)
+                depth_actor_loss = (action_weight_batch * action_loss).mean()
+            else:
+                depth_actor_loss = action_loss.mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
 
             loss = depth_actor_loss + yaw_loss

@@ -116,6 +116,23 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
+
+    def _compute_near_failure_score(self):
+        roll_pitch_limit = self.depth_encoder_cfg.get("near_failure_roll_pitch_limit", 1.5)
+        scores = [
+            torch.abs(self.env.roll) / roll_pitch_limit,
+            torch.abs(self.env.pitch) / roll_pitch_limit,
+        ]
+
+        if hasattr(self.env, "root_states"):
+            height_target = self.depth_encoder_cfg.get("near_failure_height_target", None)
+            if height_target is None:
+                height_target = self.env.cfg.rewards.base_height_target
+            height_cutoff = self.depth_encoder_cfg.get("near_failure_height_cutoff", -0.25)
+            height_range = max(height_target - height_cutoff, 1e-6)
+            scores.append((height_target - self.env.root_states[:, 2]) / height_range)
+
+        return torch.stack(scores, dim=0).amax(dim=0).clamp(0.0, 1.0)
         
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -234,6 +251,7 @@ class OnPolicyRunner:
         infos["delta_yaw_ok"] = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.device)
         self.alg.depth_encoder.train()
         self.alg.depth_actor.train()
+        use_action_weight = self.depth_encoder_cfg.get("action_loss_use_weight", True)
 
         num_pretrain_iter = 0
         for it in range(self.current_learning_iteration, tot_iter):
@@ -245,6 +263,8 @@ class OnPolicyRunner:
             yaw_buffer_student = []
             yaw_buffer_teacher = []
             delta_yaw_ok_buffer = []
+            action_weight_buffer = []
+            near_failure_score_buffer = []
             for i in range(self.depth_encoder_cfg["num_steps_per_env"]):
                 if infos["depth"] != None:
                     with torch.no_grad():
@@ -271,6 +291,18 @@ class OnPolicyRunner:
                 delta_yaw_ok_buffer.append(torch.nonzero(infos["delta_yaw_ok"]).size(0) / infos["delta_yaw_ok"].numel())
                 actions_student = self.alg.depth_actor(obs_student, hist_encoding=True, scandots_latent=depth_latent)
                 actions_student_buffer.append(actions_student)
+                near_failure_score = self._compute_near_failure_score()
+                if use_action_weight:
+                    action_weight = 1.0 + self.depth_encoder_cfg.get("action_loss_weight_alpha", 1.0) * near_failure_score
+                    action_weight = torch.clamp(
+                        action_weight,
+                        min=self.depth_encoder_cfg.get("action_loss_weight_min", 1.0),
+                        max=self.depth_encoder_cfg.get("action_loss_weight_max", 3.0),
+                    )
+                else:
+                    action_weight = torch.ones_like(near_failure_score)
+                action_weight_buffer.append(action_weight)
+                near_failure_score_buffer.append(near_failure_score)
 
                 # detach actions before feeding the env
                 if it < num_pretrain_iter:
@@ -306,7 +338,12 @@ class OnPolicyRunner:
             actions_student_buffer = torch.cat(actions_student_buffer, dim=0)
             yaw_buffer_student = torch.cat(yaw_buffer_student, dim=0)
             yaw_buffer_teacher = torch.cat(yaw_buffer_teacher, dim=0)
-            depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher)
+            action_weight_buffer = torch.cat(action_weight_buffer, dim=0)
+            near_failure_score_buffer = torch.cat(near_failure_score_buffer, dim=0)
+            action_loss_weight_mean = action_weight_buffer.mean().item()
+            near_failure_score_mean = near_failure_score_buffer.mean().item()
+            action_weight_batch = action_weight_buffer if use_action_weight else None
+            depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher, action_weight_batch)
 
             # depth_encoder_loss, depth_actor_loss = self.alg.update_depth_both(depth_latent_buffer, scandots_latent_buffer, actions_student_buffer, actions_teacher_buffer)
             stop = time.time()
@@ -349,6 +386,9 @@ class OnPolicyRunner:
         wandb_dict['Loss_depth/depth_encoder'] = locs['depth_encoder_loss']
         wandb_dict['Loss_depth/depth_actor'] = locs['depth_actor_loss']
         wandb_dict['Loss_depth/yaw'] = locs['yaw_loss']
+        wandb_dict['Loss_depth/action_weight_enabled'] = int(locs['use_action_weight'])
+        wandb_dict['Loss_depth/action_weight_mean'] = locs['action_loss_weight_mean']
+        wandb_dict['Loss_depth/near_failure_score_mean'] = locs['near_failure_score_mean']
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
@@ -372,6 +412,8 @@ class OnPolicyRunner:
                           f"""{'Depth encoder loss:':>{pad}} {locs['depth_encoder_loss']:.4f}\n"""
                           f"""{'Depth actor loss:':>{pad}} {locs['depth_actor_loss']:.4f}\n"""
                           f"""{'Yaw loss:':>{pad}} {locs['yaw_loss']:.4f}\n"""
+                          f"""{'Action loss weight mean:':>{pad}} {locs['action_loss_weight_mean']:.4f}\n"""
+                          f"""{'Near failure score mean:':>{pad}} {locs['near_failure_score_mean']:.4f}\n"""
                           f"""{'Delta yaw ok percentage:':>{pad}} {locs['delta_yaw_ok_percentage']:.4f}\n""")
         else:
             log_string = (f"""{'#' * width}\n""")
