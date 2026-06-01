@@ -57,8 +57,8 @@ class TaskRegistry():
         return self.task_classes[name]
     
     def get_cfgs(self, name) -> Tuple[LeggedRobotCfg, LeggedRobotCfgPPO]:
-        train_cfg = self.train_cfgs[name]
-        env_cfg = self.env_cfgs[name]
+        train_cfg = deepcopy(self.train_cfgs[name])
+        env_cfg = deepcopy(self.env_cfgs[name])
         # copy seed
         env_cfg.seed = train_cfg.seed
         return env_cfg, train_cfg
@@ -155,6 +155,7 @@ class TaskRegistry():
         if args.resumeid:
             log_root = LEGGED_GYM_ROOT_DIR + f"/logs/{args.proj_name}/" + args.resumeid
             resume = True
+        resume_path = None
         if resume:
             # load previously trained model
             print(log_root)
@@ -166,7 +167,8 @@ class TaskRegistry():
                 runner.alg.actor_critic.reset_std(train_cfg.policy.init_noise_std, 12, device=runner.device)
 
         if "return_log_dir" in kwargs:
-            return runner, train_cfg, os.path.dirname(resume_path)
+            resolved_log_dir = os.path.dirname(resume_path) if resume_path is not None else log_dir
+            return runner, train_cfg, resolved_log_dir
         else:    
             return runner, train_cfg
 

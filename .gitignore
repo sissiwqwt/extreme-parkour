@@ -9,4 +9,7 @@ isaacgym*
 ppo.md
 usage.md
 proposal.md
-usage.md
+__pycache__/
+*.py[cod]
+*.egg-info/
+outputs/
