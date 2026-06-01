@@ -1,0 +1,20 @@
+[package]
+version = "0.1.0"
+category = "isaaclab"
+readme = "README.md"
+
+title = "Extreme Parkour Tasks"
+author = "OpenAI Codex"
+maintainer = "OpenAI Codex"
+description = "Isaac Lab task package for extreme-parkour."
+repository = "https://github.com/isaac-sim/IsaacLab.git"
+keywords = ["isaaclab", "locomotion", "parkour", "quadruped"]
+
+[dependencies]
+"isaaclab" = {}
+"isaaclab_assets" = {}
+"isaaclab_rl" = {}
+"isaaclab_tasks" = {}
+
+[[python.module]]
+name = "extreme_parkour_tasks"

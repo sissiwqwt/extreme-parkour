@@ -200,6 +200,7 @@ class LeggedRobotCfg(BaseConfig):
                         "parkour_v2": 0.15,
                         "narrow_gap": 0.1,
                         "climbing_wall": 0.1,
+                        "slanted_hurdle": 0.0,
                         "demo": 0.0,}
         terrain_proportions = list(terrain_dict.values())
         

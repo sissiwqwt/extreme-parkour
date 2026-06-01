@@ -8,3 +8,8 @@ isaacgym*
 *.log
 ppo.md
 usage.md
+proposal.md
+__pycache__/
+*.py[cod]
+*.egg-info/
+outputs/
