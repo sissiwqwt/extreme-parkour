@@ -48,6 +48,36 @@ sim_params.physx.use_gpu = False
 sim_params.physx.num_threads = 4
 
 
+ALL_DISTILL_TERRAINS = (
+    # "smooth slope",
+    # "rough slope up",
+    # "rough slope down",
+    # "rough stairs up",
+    # "rough stairs down",
+    # "discrete",
+    # "stepping stones",
+    # "gaps",
+    # "smooth flat",
+    # "pit",
+    # "wall",
+    # "platform",
+    # "large stairs up",
+    # "large stairs down",
+    # "parkour",
+    # "parkour_hurdle",
+    # "parkour_flat",
+    # "parkour_step",
+    # "parkour_gap",
+    # "alternating_step",
+    # "beam_gap",
+    # "asymmetric_gap",
+    "parkour_v2",
+    # "narrow_gap",
+    # "climbing_wall",
+    # "demo",
+)
+
+
 def _pop_script_argv():
     """Parse and remove recording-related flags before `get_args()` consumes sys.argv."""
     p = argparse.ArgumentParser(add_help=False)
@@ -124,7 +154,7 @@ def _pop_script_argv():
         "--terrain_difficulty",
         type=float,
         default=None,
-        help="Fixed normalized terrain difficulty in [0, 1]. Mapped to the nearest terrain row.",
+        help="Fixed normalized terrain difficulty in [0, 1]. Applied exactly to generated terrains.",
     )
     p.add_argument(
          "--use_gpu",
@@ -167,6 +197,8 @@ def _active_terrain_name(terrain_dict):
     active = [(name, weight) for name, weight in terrain_dict.items() if weight > 0]
     if not active:
         return "terrain"
+    if len(active) > 1:
+        return "all_terrains"
     return max(active, key=lambda item: item[1])[0]
 
 
@@ -181,11 +213,51 @@ def _default_video_path(env_cfg, checkpoint):
     return os.path.join(demos_dir, f"{terrain}_distill_{checkpoint}.mp4")
 
 
-def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict):
-    task_class = task_registry.get_task_class(name)
-    env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
+def _distill_terrain_dict():
+    return {terrain_name: 1.0 for terrain_name in ALL_DISTILL_TERRAINS}
+
+
+def _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty):
     env_cfg.terrain.terrain_dict = dict(terrain_dict)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    env_cfg.terrain.num_cols = len(env_cfg.terrain.terrain_dict)
+    if terrain_difficulty is not None:
+        env_cfg.terrain.num_rows = 1
+        env_cfg.terrain.fixed_difficulty = float(terrain_difficulty)
+    else:
+        if hasattr(env_cfg.terrain, "fixed_difficulty"):
+            delattr(env_cfg.terrain, "fixed_difficulty")
+        env_cfg.terrain.num_rows = 5
+
+
+def _patch_fixed_terrain_difficulty():
+    from legged_gym.utils import terrain as terrain_module
+
+    Terrain = terrain_module.Terrain
+    if getattr(Terrain.curiculum, "_distill_fixed_difficulty_patch", False):
+        return
+
+    original_curiculum = Terrain.curiculum
+
+    def curiculum_with_fixed_difficulty(self, random=False, max_difficulty=False):
+        fixed_difficulty = getattr(self.cfg, "fixed_difficulty", None)
+        if fixed_difficulty is None:
+            return original_curiculum(self, random=random, max_difficulty=max_difficulty)
+
+        for j in range(self.cfg.num_cols):
+            for i in range(self.cfg.num_rows):
+                choice = j / self.cfg.num_cols + 0.001
+                terrain = self.make_terrain(choice, float(fixed_difficulty))
+                self.add_terrain_to_map(terrain, i, j)
+
+    curiculum_with_fixed_difficulty._distill_fixed_difficulty_patch = True
+    Terrain.curiculum = curiculum_with_fixed_difficulty
+
+
+def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict, terrain_difficulty):
+    task_class = task_registry.get_task_class(name)
+    env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
+    _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty)
     set_seed(env_cfg.seed)
 
     sim_params = {"sim": class_to_dict(env_cfg.sim)}
@@ -208,14 +280,17 @@ def _requested_terrain_level(rec_cfg, num_rows):
             )
         return rec_cfg.terrain_level
 
-    if rec_cfg.terrain_difficulty is not None:
-        if rec_cfg.terrain_difficulty < 0.0 or rec_cfg.terrain_difficulty > 1.0:
-            raise ValueError(
-                f"--terrain_difficulty must be in [0, 1], got {rec_cfg.terrain_difficulty}"
-            )
-        return int(round(rec_cfg.terrain_difficulty * (num_rows - 1)))
-
     return None
+
+
+def _requested_terrain_difficulty(rec_cfg):
+    if rec_cfg.terrain_difficulty is None:
+        return None
+    if rec_cfg.terrain_difficulty < 0.0 or rec_cfg.terrain_difficulty > 1.0:
+        raise ValueError(
+            f"--terrain_difficulty must be in [0, 1], got {rec_cfg.terrain_difficulty}"
+        )
+    return rec_cfg.terrain_difficulty
 
 
 def _apply_fixed_terrain_level(env, terrain_level):
@@ -333,47 +408,29 @@ def play_headless_record(args, rec_cfg):
             "Re-run with `--use_camera` (same as training / `play.py` for vision policies)."
         )
 
-    if args.num_envs is None:
-        args.num_envs = max(1, rec_cfg.record_env + 1)
-
     log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
 
     if args.nodelay:
         env_cfg.domain_rand.action_delay_view = 0
-    env_cfg.env.num_envs = args.num_envs
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
     env_cfg.terrain.num_rows = 5
-    env_cfg.terrain.num_cols = 5
     env_cfg.terrain.height = [0.02, 0.02]
-    env_cfg.terrain.terrain_dict = {
-        "smooth slope": 0.0,
-        "rough slope up": 0.0,
-        "rough slope down": 0.0,
-        "rough stairs up": 0.0,
-        "rough stairs down": 0.0,
-        "discrete": 0.0,
-        "stepping stones": 0.0,
-        "gaps": 0.0,
-        "smooth flat": 0,
-        "pit": 0.0,
-        "wall": 0.0,
-        "platform": 0.0,
-        "large stairs up": 0.0,
-        "large stairs down": 0.0,
-        "parkour": 0.0,
-        "parkour_hurdle": 0.0,
-        "parkour_flat": 0.0,
-        "parkour_step": 1.0,
-        "parkour_gap": 0.0,
-        "demo": 0.0,
-    }
-    terrain_dict = dict(env_cfg.terrain.terrain_dict)
-    env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+    terrain_dict = _distill_terrain_dict()
+    terrain_difficulty = _requested_terrain_difficulty(rec_cfg)
+    _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty)
+
+    min_num_envs = max(len(terrain_dict), rec_cfg.record_env + 1)
+    args.num_envs = min_num_envs if args.num_envs is None else max(args.num_envs, min_num_envs)
+    env_cfg.env.num_envs = args.num_envs
+
     terrain_level = _requested_terrain_level(rec_cfg, env_cfg.terrain.num_rows)
-    if terrain_level is None:
+    if terrain_difficulty is not None:
+        env_cfg.terrain.curriculum = False
+        env_cfg.terrain.max_difficulty = False
+    elif terrain_level is None:
         env_cfg.terrain.curriculum = False
         env_cfg.terrain.max_difficulty = True
     else:
@@ -404,12 +461,14 @@ def play_headless_record(args, rec_cfg):
                 env_cfg.sim.physx.use_gpu = False
 
     _patch_sim_params(env_cfg, rec_cfg.use_gpu)
+    _patch_fixed_terrain_difficulty()
 
     env, env_cfg = _make_env_with_terrain_override(
         name=args.task,
         args=args,
         env_cfg=env_cfg,
         terrain_dict=terrain_dict,
+        terrain_difficulty=terrain_difficulty,
     )
     _apply_fixed_terrain_level(env, terrain_level)
     obs = env.get_observations()
@@ -515,6 +574,12 @@ def play_headless_record(args, rec_cfg):
     print(
         f"Recording env {rec_cfg.record_env} ({mode_desc}) → {video_path} @ {fps} FPS, {w}x{h}"
     )
+    print(
+        f"Running {len(env_cfg.terrain.terrain_dict)} terrain types across "
+        f"{env_cfg.terrain.num_cols} columns and {env.num_envs} envs."
+    )
+    if terrain_difficulty is not None:
+        print(f"Using fixed terrain difficulty {terrain_difficulty:.2f}.")
     if terrain_level is not None:
         terrain_difficulty = terrain_level / max(env_cfg.terrain.num_rows - 1, 1)
         print(

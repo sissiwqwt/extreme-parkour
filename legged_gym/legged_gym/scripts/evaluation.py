@@ -215,7 +215,34 @@ def _selected_terrain_weights(terrain_set, env_cfg):
     return dict(TERRAIN_SETS[terrain_set])
 
 
+def _active_terrain_names(terrain_dict):
+    return [name for name, weight in terrain_dict.items() if float(weight) > 0.0]
+
+
+def _equal_episode_targets(terrain_names, requested_episodes):
+    if not terrain_names:
+        raise ValueError("No active terrains were configured for evaluation.")
+    if requested_episodes < len(terrain_names):
+        raise ValueError(
+            f"eval_episodes={requested_episodes} is smaller than the number of active terrains "
+            f"({len(terrain_names)}), so equal per-terrain evaluation is impossible."
+        )
+
+    episodes_per_terrain = requested_episodes // len(terrain_names)
+    target_total = episodes_per_terrain * len(terrain_names)
+    if target_total != requested_episodes:
+        print(
+            f"Adjusting eval episodes from {requested_episodes} to {target_total} so each of "
+            f"{len(terrain_names)} terrains gets exactly {episodes_per_terrain} episodes."
+        )
+    return {name: episodes_per_terrain for name in terrain_names}, target_total
+
+
 def _terrain_name_map(env_cfg):
+    column_names = getattr(env_cfg.terrain, "eval_column_terrain_names", None)
+    if column_names:
+        return {col: name for col, name in enumerate(column_names)}
+
     proportions = np.asarray(env_cfg.terrain.terrain_proportions, dtype=np.float64)
     if proportions.sum() <= 0:
         return {}
@@ -235,10 +262,10 @@ def _configure_eval_env(env_cfg, eval_cfg):
     env_cfg.env.episode_length_s = eval_cfg.episode_length_s
     env_cfg.commands.resampling_time = eval_cfg.episode_length_s
     env_cfg.terrain.num_rows = 5
-    env_cfg.terrain.num_cols = max(5, env_cfg.terrain.num_cols)
     env_cfg.terrain.height = [0.02, 0.02]
     env_cfg.terrain.curriculum = False
-    env_cfg.terrain.max_difficulty = eval_cfg.max_difficulty
+    # Evaluation always samples terrain difficulty from [0.7, 1.0].
+    env_cfg.terrain.max_difficulty = True
     env_cfg.depth.angle = [0, 1]
     env_cfg.noise.add_noise = eval_cfg.add_noise
     env_cfg.domain_rand.randomize_friction = eval_cfg.randomize_friction
@@ -262,8 +289,21 @@ def _configure_eval_env(env_cfg, eval_cfg):
         for name, weight in selected.items():
             terrain_dict[_canonical_terrain_name(name, env_cfg)] = weight
 
-    env_cfg.terrain.terrain_dict = terrain_dict
-    env_cfg.terrain.terrain_proportions = list(terrain_dict.values())
+    active_names = _active_terrain_names(terrain_dict)
+    if not active_names:
+        raise ValueError("No active terrains were configured for evaluation.")
+
+    # Use one terrain column per active terrain so env_id -> terrain_type allocation
+    # is as balanced as possible across eval envs.
+    env_cfg.terrain.num_cols = len(active_names)
+    uniform_weight = 1.0 / len(active_names)
+    eval_terrain_dict = {name: 0.0 for name in terrain_dict.keys()}
+    for name in active_names:
+        eval_terrain_dict[name] = uniform_weight
+
+    env_cfg.terrain.terrain_dict = eval_terrain_dict
+    env_cfg.terrain.terrain_proportions = list(eval_terrain_dict.values())
+    env_cfg.terrain.eval_column_terrain_names = list(active_names)
 
 
 def _tensor_to_list(tensor):
@@ -412,6 +452,12 @@ def evaluate(args, eval_cfg):
     json_path = os.path.join(output_dir, basename + ".json")
 
     terrain_lookup = _terrain_name_map(env_cfg)
+    eval_terrain_names = [terrain_lookup[col] for col in sorted(terrain_lookup.keys())]
+    terrain_episode_targets, target_eval_episodes = _equal_episode_targets(
+        eval_terrain_names,
+        eval_cfg.eval_episodes,
+    )
+    terrain_episode_counts = {name: 0 for name in eval_terrain_names}
     num_goals = max(1, int(env_cfg.terrain.num_goals))
     success_threshold = float(eval_cfg.success_threshold)
     stuck_window_steps = max(1, int(round(eval_cfg.stuck_window_s / env.dt)))
@@ -430,7 +476,7 @@ def evaluate(args, eval_cfg):
     }
 
     print(
-        f"Evaluating {policy_id} ({policy_type}) for {eval_cfg.eval_episodes} episodes "
+        f"Evaluating {policy_id} ({policy_type}) for {target_eval_episodes} episodes "
         f"with {env.num_envs} envs -> {csv_path}"
     )
 
@@ -472,6 +518,10 @@ def evaluate(args, eval_cfg):
                 )
                 terrain_col = int(env._eval_terminal_col[env_id].item())
                 terrain_name = terrain_lookup.get(terrain_col, f"col_{terrain_col}")
+                if terrain_episode_counts.get(terrain_name, 0) >= terrain_episode_targets.get(
+                    terrain_name, 0
+                ):
+                    continue
 
                 rows.append(
                     {
@@ -497,6 +547,7 @@ def evaluate(args, eval_cfg):
                         "failure_reason": _failure_reason(success, fall, stuck, timeout),
                     }
                 )
+                terrain_episode_counts[terrain_name] += 1
 
             start_x[done_ids] = env.root_states[done_ids, 0]
             last_window_x[done_ids] = env.root_states[done_ids, 0]
@@ -504,8 +555,8 @@ def evaluate(args, eval_cfg):
             step_sum[done_ids] = 0.0
             env._eval_terminal_valid[done_ids] = False
 
-        if len(rows) >= eval_cfg.eval_episodes:
-            rows = rows[: eval_cfg.eval_episodes]
+        if len(rows) >= target_eval_episodes:
+            rows = rows[: target_eval_episodes]
             break
 
     with open(csv_path, "w", newline="") as f:
@@ -513,7 +564,16 @@ def evaluate(args, eval_cfg):
         writer.writeheader()
         writer.writerows(rows)
 
-    summary = _summarize(rows, csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type)
+    summary = _summarize(
+        rows,
+        csv_path,
+        resolved_log_pth,
+        env_cfg,
+        eval_cfg,
+        policy_type,
+        terrain_episode_targets,
+        target_eval_episodes,
+    )
     with open(json_path, "w") as f:
         json.dump(summary, f, indent=2)
 
@@ -522,7 +582,16 @@ def evaluate(args, eval_cfg):
     print(f"Wrote JSON: {json_path}")
 
 
-def _summarize(rows, csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type):
+def _summarize(
+    rows,
+    csv_path,
+    resolved_log_pth,
+    env_cfg,
+    eval_cfg,
+    policy_type,
+    terrain_episode_targets,
+    target_eval_episodes,
+):
     metrics = {
         "episodes": len(rows),
         "success_rate": float(np.mean([r["success"] for r in rows])) if rows else 0.0,
@@ -556,6 +625,10 @@ def _summarize(rows, csv_path, resolved_log_pth, env_cfg, eval_cfg, policy_type)
         "resolved_log_path": resolved_log_pth,
         "policy_type": policy_type,
         "terrain_dict": env_cfg.terrain.terrain_dict,
+        "requested_eval_episodes": eval_cfg.eval_episodes,
+        "target_eval_episodes": target_eval_episodes,
+        "terrain_episode_targets": terrain_episode_targets,
+        "difficulty_sampling_range": [0.7, 1.0],
         "success_threshold": eval_cfg.success_threshold,
         "stuck_window_s": eval_cfg.stuck_window_s,
         "stuck_threshold_m": eval_cfg.stuck_threshold_m,

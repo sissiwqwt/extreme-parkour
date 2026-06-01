@@ -30,7 +30,6 @@
 
 import time
 import os
-import re
 from collections import deque
 import statistics
 
@@ -366,7 +365,8 @@ class OnPolicyRunner:
         
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        total_iterations = locs.get('tot_iter', self.start_learning_iteration + locs['num_learning_iterations'])
+        str = f" \033[1m Learning iteration {locs['it']}/{total_iterations} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
@@ -445,7 +445,8 @@ class OnPolicyRunner:
 
         wandb.log(wandb_dict, step=locs['it'])
 
-        str = f" \033[1m Learning iteration {locs['it']}/{self.current_learning_iteration + locs['num_learning_iterations']} \033[0m "
+        total_iterations = locs.get('tot_iter', self.start_learning_iteration + locs['num_learning_iterations'])
+        str = f" \033[1m Learning iteration {locs['it']}/{total_iterations} \033[0m "
 
         if len(locs['rewbuffer']) > 0:
             log_string = (f"""{'#' * width}\n"""
@@ -526,11 +527,10 @@ class OnPolicyRunner:
             self.alg.optimizer.load_state_dict(loaded_dict['optimizer_state_dict'])
         if 'terrain_curriculum_state' in loaded_dict and hasattr(self.env, "load_terrain_curriculum_state"):
             self.env.load_terrain_curriculum_state(loaded_dict['terrain_curriculum_state'])
-        checkpoint_iter = loaded_dict.get('iter', 0)
-        checkpoint_name_match = re.search(r"model_(\d+)\.pt$", os.path.basename(path))
-        if checkpoint_name_match is not None:
-            checkpoint_iter = int(checkpoint_name_match.group(1))
-        self.current_learning_iteration = checkpoint_iter + 1
+        # Keep checkpoint numbering local to the resumed run, matching weighted-loss.
+        # The model and optimizer are restored above; the runner iteration counter is
+        # intentionally left unchanged so subsequent checkpoints start from 0.
+        # self.current_learning_iteration = loaded_dict['iter']
         print("*" * 80)
         return loaded_dict['infos']
 
