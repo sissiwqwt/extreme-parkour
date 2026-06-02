@@ -125,13 +125,29 @@ class PPO:
         self.if_depth = depth_encoder != None
         if self.if_depth:
             self.depth_encoder = depth_encoder
-            self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
             self.depth_encoder_paras = depth_encoder_paras
             self.enable_heading_model = depth_encoder_paras.get("enable_heading_model", False)
             self.heading_loss_weight = depth_encoder_paras.get("heading_loss_weight", 1.0)
             self.action_loss_weight = depth_encoder_paras.get("action_loss_weight", 1.0)
+            self.freeze_backbone_during_action_distillation = depth_encoder_paras.get("freeze_backbone_during_action_distillation", True)
             self.depth_actor = depth_actor
-            self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
+            if self.enable_heading_model:
+                self.depth_encoder_optimizer = optim.Adam(
+                    self.depth_encoder.heading_parameters(include_backbone=True),
+                    lr=depth_encoder_paras["learning_rate"],
+                )
+                self.depth_actor_optimizer = optim.Adam(
+                    [
+                        *self.depth_actor.parameters(),
+                        *self.depth_encoder.action_parameters(
+                            include_backbone=not self.freeze_backbone_during_action_distillation,
+                        ),
+                    ],
+                    lr=depth_encoder_paras["learning_rate"],
+                )
+            else:
+                self.depth_encoder_optimizer = optim.Adam(self.depth_encoder.parameters(), lr=depth_encoder_paras["learning_rate"])
+                self.depth_actor_optimizer = optim.Adam([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], lr=depth_encoder_paras["learning_rate"])
 
     def init_storage(self, num_envs, num_transitions_per_env, actor_obs_shape, critic_obs_shape, action_shape):
         self.storage = RolloutStorage(num_envs, num_transitions_per_env, actor_obs_shape,  critic_obs_shape, action_shape, self.device)
@@ -330,11 +346,17 @@ class PPO:
             depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
 
-            loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss
+            if self.enable_heading_model:
+                loss = self.action_loss_weight * depth_actor_loss
+            else:
+                loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss
 
             self.depth_actor_optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.depth_actor.parameters(), self.max_grad_norm)
+            depth_actor_params = []
+            for param_group in self.depth_actor_optimizer.param_groups:
+                depth_actor_params.extend(param_group["params"])
+            nn.utils.clip_grad_norm_(depth_actor_params, self.max_grad_norm)
             self.depth_actor_optimizer.step()
             return depth_actor_loss.item(), yaw_loss.item()
 
@@ -348,6 +370,30 @@ class PPO:
             nn.utils.clip_grad_norm_(self.depth_encoder.parameters(), self.max_grad_norm)
             self.depth_encoder_optimizer.step()
             return yaw_loss.item()
+
+    def set_heading_pretrain_mode(self, heading_pretrain):
+        if not self.if_depth:
+            return
+        if not self.enable_heading_model:
+            for param in self.depth_encoder.parameters():
+                param.requires_grad = True
+            for param in self.depth_actor.parameters():
+                param.requires_grad = True
+            return
+
+        if heading_pretrain:
+            self.depth_encoder.set_heading_trainable(True)
+            self.depth_encoder.set_action_trainable(False)
+            for param in self.depth_actor.parameters():
+                param.requires_grad = False
+        else:
+            self.depth_encoder.set_heading_trainable(False)
+            self.depth_encoder.set_action_trainable(
+                True,
+                include_backbone=not self.freeze_backbone_during_action_distillation,
+            )
+            for param in self.depth_actor.parameters():
+                param.requires_grad = True
     
     def update_depth_both(self, depth_latent_batch, scandots_latent_batch, actions_student_batch, actions_teacher_batch):
         if self.if_depth:

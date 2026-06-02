@@ -410,6 +410,7 @@ class LeggedRobotCfgPPO(BaseConfig):
         heading_loss_weight = 1.0
         action_loss_weight = 1.0
         latent_loss_weight = 0.0
+        freeze_backbone_during_action_distillation = True
 
     class estimator:
         train_with_estimated_states = True

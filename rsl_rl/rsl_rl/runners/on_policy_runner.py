@@ -276,6 +276,7 @@ class OnPolicyRunner:
             start = time.time()
             local_it = it - self.start_learning_iteration
             heading_pretrain = enable_heading_model and local_it < num_pretrain_iter
+            self.alg.set_heading_pretrain_mode(heading_pretrain)
             depth_latent_buffer = []
             scandots_latent_buffer = []
             actions_teacher_buffer = []

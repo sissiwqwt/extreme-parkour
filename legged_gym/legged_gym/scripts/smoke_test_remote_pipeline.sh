@@ -7,6 +7,7 @@ set -u
 #   bash smoke_test_remote_pipeline.sh all
 #   bash smoke_test_remote_pipeline.sh train
 #   bash smoke_test_remote_pipeline.sh play
+#   bash smoke_test_remote_pipeline.sh eval
 #   bash smoke_test_remote_pipeline.sh web
 #   bash smoke_test_remote_pipeline.sh video
 #
@@ -34,6 +35,8 @@ TEACHER_ITERS="${TEACHER_ITERS:-20}"
 STUDENT_ITERS="${STUDENT_ITERS:-20}"
 HEADING_PRETRAIN_ITERS="${HEADING_PRETRAIN_ITERS:-5}"
 PLAY_STEPS="${PLAY_STEPS:-100}"
+EVAL_EPISODES="${EVAL_EPISODES:-16}"
+EVAL_MAX_STEPS="${EVAL_MAX_STEPS:-300}"
 WEB_PLAY_STEPS="${WEB_PLAY_STEPS:-600}"
 VIDEO_SECONDS="${VIDEO_SECONDS:-8}"
 WEB_PORT="${WEB_PORT:-5000}"
@@ -289,6 +292,68 @@ play_smoke() {
       --enable_heading_model \
       --headless \
       --play_steps "$PLAY_STEPS"
+
+  run_test "play_student_heading_on_auto_detect_headless" \
+    python play.py \
+      --task "$TASK" \
+      --device "$DEVICE" \
+      --rl_device "$RL_DEVICE" \
+      --proj_name "$PROJ" \
+      --exptid "$STUDENT_HEADING_ON_TTC_ON_RUN" \
+      --checkpoint -1 \
+      --use_camera \
+      --headless \
+      --play_steps "$PLAY_STEPS"
+}
+
+evaluation_smoke() {
+  cd "$SCRIPT_DIR" || return 1
+
+  run_test "evaluation_student_heading_off_depth" \
+    python evaluation.py \
+      --task "$TASK" \
+      --device "$DEVICE" \
+      --rl_device "$RL_DEVICE" \
+      --proj_name "$PROJ" \
+      --exptid "$STUDENT_HEADING_OFF_TTC_ON_RUN" \
+      --checkpoint -1 \
+      --use_camera \
+      --policy_type depth \
+      --terrain_set baseline \
+      --eval_episodes "$EVAL_EPISODES" \
+      --eval_max_steps "$EVAL_MAX_STEPS" \
+      --output_dir "$RESULT_DIR/evaluation"
+
+  run_test "evaluation_student_heading_on_explicit" \
+    python evaluation.py \
+      --task "$TASK" \
+      --device "$DEVICE" \
+      --rl_device "$RL_DEVICE" \
+      --proj_name "$PROJ" \
+      --exptid "$STUDENT_HEADING_ON_TTC_ON_RUN" \
+      --checkpoint -1 \
+      --use_camera \
+      --enable_heading_model \
+      --policy_type depth \
+      --terrain_set baseline \
+      --eval_episodes "$EVAL_EPISODES" \
+      --eval_max_steps "$EVAL_MAX_STEPS" \
+      --output_dir "$RESULT_DIR/evaluation"
+
+  run_test "evaluation_student_heading_on_auto_detect" \
+    python evaluation.py \
+      --task "$TASK" \
+      --device "$DEVICE" \
+      --rl_device "$RL_DEVICE" \
+      --proj_name "$PROJ" \
+      --exptid "$STUDENT_HEADING_ON_TTC_ON_RUN" \
+      --checkpoint -1 \
+      --use_camera \
+      --policy_type depth \
+      --terrain_set baseline \
+      --eval_episodes "$EVAL_EPISODES" \
+      --eval_max_steps "$EVAL_MAX_STEPS" \
+      --output_dir "$RESULT_DIR/evaluation"
 }
 
 wait_for_http() {
@@ -485,6 +550,7 @@ print_config() {
   log_info "mode: $MODE"
   log_info "task=$TASK device=$DEVICE rl_device=$RL_DEVICE proj=$PROJ"
   log_info "teacher_iters=$TEACHER_ITERS student_iters=$STUDENT_ITERS heading_pretrain_iters=$HEADING_PRETRAIN_ITERS"
+  log_info "play_steps=$PLAY_STEPS eval_episodes=$EVAL_EPISODES eval_max_steps=$EVAL_MAX_STEPS"
 }
 
 print_final_summary() {
@@ -510,6 +576,9 @@ main() {
     play)
       play_smoke
       ;;
+    eval)
+      evaluation_smoke
+      ;;
     web)
       web_smoke
       ;;
@@ -520,12 +589,13 @@ main() {
       train_teacher
       train_student
       play_smoke
+      evaluation_smoke
       web_smoke
       video_smoke
       ;;
     *)
       echo "Unknown mode: $MODE" >&2
-      echo "Expected one of: all, train, play, web, video" >&2
+      echo "Expected one of: all, train, play, eval, web, video" >&2
       return 2
       ;;
   esac

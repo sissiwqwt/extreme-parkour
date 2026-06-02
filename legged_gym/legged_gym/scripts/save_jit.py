@@ -103,8 +103,14 @@ def play(args):
     if not os.path.exists(os.path.join(load_run, "traced")):
         os.mkdir(os.path.join(load_run, "traced"))
     depth_encoder_state_dict = ac_state_dict['depth_encoder_state_dict']
-    depth_output_dim = depth_encoder_state_dict['output_mlp.0.weight'].shape[0]
-    heading_dim = depth_output_dim - 32
+    if 'output_mlp.0.weight' in depth_encoder_state_dict:
+        depth_output_dim = depth_encoder_state_dict['output_mlp.0.weight'].shape[0]
+        heading_dim = depth_output_dim - 32
+    elif 'heading_predictor_head.output_mlp.0.weight' in depth_encoder_state_dict:
+        heading_dim = depth_encoder_state_dict['heading_predictor_head.output_mlp.0.weight'].shape[0]
+        depth_output_dim = 32 + heading_dim
+    else:
+        raise KeyError("Cannot infer depth encoder heading dim from state_dict.")
     state_dict = {
         'depth_encoder_state_dict': depth_encoder_state_dict,
         'depth_encoder_output_dim': depth_output_dim,

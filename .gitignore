@@ -5,3 +5,6 @@ isaacgym*
 .codex
 *.mp4
 *.patch
+checkpoints/
+results/
+*repair_new_evaluation_tables.py

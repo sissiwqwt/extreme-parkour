@@ -3,43 +3,131 @@ import torch.nn as nn
 import sys
 import torchvision
 
-class RecurrentDepthBackbone(nn.Module):
-    def __init__(self, base_backbone, env_cfg, heading_dim=2) -> None:
+
+class VisualStudentBackbone(nn.Module):
+    def __init__(self, base_backbone, env_cfg) -> None:
         super().__init__()
         activation = nn.ELU()
-        last_activation = nn.Tanh()
         self.base_backbone = base_backbone
-        self.heading_dim = heading_dim
         if env_cfg == None:
-            self.combination_mlp = nn.Sequential(
-                                    nn.Linear(32 + 53, 128),
-                                    activation,
-                                    nn.Linear(128, 32)
-                                )
+            proprio_dim = 53
         else:
-            self.combination_mlp = nn.Sequential(
-                                        nn.Linear(32 + env_cfg.env.n_proprio, 128),
-                                        activation,
-                                        nn.Linear(128, 32)
-                                    )
+            proprio_dim = env_cfg.env.n_proprio
+        self.combination_mlp = nn.Sequential(
+            nn.Linear(32 + proprio_dim, 128),
+            activation,
+            nn.Linear(128, 32),
+        )
         self.rnn = nn.GRU(input_size=32, hidden_size=512, batch_first=True)
-        self.output_mlp = nn.Sequential(
-                                nn.Linear(512, 32 + self.heading_dim),
-                                last_activation
-                            )
         self.hidden_states = None
 
     def forward(self, depth_image, proprioception):
-        depth_image = self.base_backbone(depth_image)
-        depth_latent = self.combination_mlp(torch.cat((depth_image, proprioception), dim=-1))
-        # depth_latent = self.base_backbone(depth_image)
-        depth_latent, self.hidden_states = self.rnn(depth_latent[:, None, :], self.hidden_states)
-        depth_latent = self.output_mlp(depth_latent.squeeze(1))
-        
-        return depth_latent
+        depth_feature = self.base_backbone(depth_image)
+        shared_feature = self.combination_mlp(torch.cat((depth_feature, proprioception), dim=-1))
+        shared_feature, self.hidden_states = self.rnn(shared_feature[:, None, :], self.hidden_states)
+        return shared_feature.squeeze(1)
 
     def detach_hidden_states(self):
         self.hidden_states = self.hidden_states.detach().clone()
+
+
+class DepthLatentHead(nn.Module):
+    def __init__(self, latent_dim=32) -> None:
+        super().__init__()
+        self.output_mlp = nn.Sequential(
+            nn.Linear(512, latent_dim),
+            nn.Tanh(),
+        )
+
+    def forward(self, shared_feature):
+        return self.output_mlp(shared_feature)
+
+
+class HeadingPredictorHead(nn.Module):
+    def __init__(self, heading_dim=2) -> None:
+        super().__init__()
+        self.output_mlp = nn.Sequential(
+            nn.Linear(512, heading_dim),
+            nn.Tanh(),
+        )
+
+    def forward(self, shared_feature):
+        return self.output_mlp(shared_feature)
+
+class RecurrentDepthBackbone(nn.Module):
+    def __init__(self, base_backbone, env_cfg, heading_dim=2) -> None:
+        super().__init__()
+        self.heading_dim = heading_dim
+        self.visual_backbone = VisualStudentBackbone(base_backbone, env_cfg)
+        self.depth_latent_head = DepthLatentHead(latent_dim=32)
+        self.heading_predictor_head = HeadingPredictorHead(heading_dim=self.heading_dim)
+
+    def forward(self, depth_image, proprioception):
+        shared_feature = self.visual_backbone(depth_image, proprioception)
+        depth_latent = self.depth_latent_head(shared_feature)
+        heading_pred = self.heading_predictor_head(shared_feature)
+        return torch.cat((depth_latent, heading_pred), dim=-1)
+
+    def detach_hidden_states(self):
+        self.visual_backbone.detach_hidden_states()
+
+    def heading_parameters(self, include_backbone=True):
+        modules = [self.heading_predictor_head]
+        if include_backbone:
+            modules.insert(0, self.visual_backbone)
+        for module in modules:
+            yield from module.parameters()
+
+    def action_parameters(self, include_backbone=False):
+        modules = [self.depth_latent_head]
+        if include_backbone:
+            modules.insert(0, self.visual_backbone)
+        for module in modules:
+            yield from module.parameters()
+
+    def set_heading_trainable(self, trainable):
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = trainable
+        for param in self.heading_predictor_head.parameters():
+            param.requires_grad = trainable
+
+    def set_action_trainable(self, trainable, include_backbone=False):
+        if include_backbone:
+            for param in self.visual_backbone.parameters():
+                param.requires_grad = trainable
+        for param in self.depth_latent_head.parameters():
+            param.requires_grad = trainable
+
+    def load_state_dict(self, state_dict, strict=True):
+        state_dict = self._upgrade_legacy_state_dict(state_dict)
+        return super().load_state_dict(state_dict, strict=strict)
+
+    def _upgrade_legacy_state_dict(self, state_dict):
+        if 'output_mlp.0.weight' not in state_dict:
+            return state_dict
+
+        output_weight = state_dict['output_mlp.0.weight']
+        output_bias = state_dict['output_mlp.0.bias']
+        if output_weight.shape[0] != 32 + self.heading_dim:
+            return state_dict
+
+        upgraded = {}
+        for key, value in state_dict.items():
+            if key.startswith('base_backbone.'):
+                upgraded['visual_backbone.' + key] = value
+            elif key.startswith('combination_mlp.'):
+                upgraded['visual_backbone.' + key] = value
+            elif key.startswith('rnn.'):
+                upgraded['visual_backbone.' + key] = value
+            elif key == 'output_mlp.0.weight':
+                upgraded['depth_latent_head.output_mlp.0.weight'] = value[:32]
+                upgraded['heading_predictor_head.output_mlp.0.weight'] = value[32:]
+            elif key == 'output_mlp.0.bias':
+                upgraded['depth_latent_head.output_mlp.0.bias'] = value[:32]
+                upgraded['heading_predictor_head.output_mlp.0.bias'] = value[32:]
+            else:
+                upgraded[key] = value
+        return upgraded
 
 class StackDepthEncoder(nn.Module):
     def __init__(self, base_backbone, env_cfg) -> None:

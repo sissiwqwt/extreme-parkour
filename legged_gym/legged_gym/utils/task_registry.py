@@ -42,6 +42,38 @@ from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 from .helpers import get_args, update_cfg_from_args, class_to_dict, get_load_path, set_seed, parse_sim_params
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 
+
+def _infer_depth_heading_dim_from_checkpoint(path):
+    try:
+        loaded_dict = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        print(f"Could not inspect checkpoint heading configuration: {exc}")
+        return None
+
+    depth_state_dict = loaded_dict.get("depth_encoder_state_dict", None)
+    if depth_state_dict is None:
+        return None
+    if "heading_predictor_head.output_mlp.0.weight" in depth_state_dict:
+        return depth_state_dict["heading_predictor_head.output_mlp.0.weight"].shape[0]
+    if "output_mlp.0.weight" in depth_state_dict:
+        return depth_state_dict["output_mlp.0.weight"].shape[0] - 32
+    return None
+
+
+def _apply_checkpoint_heading_cfg(train_cfg, checkpoint_path, args):
+    heading_dim = _infer_depth_heading_dim_from_checkpoint(checkpoint_path)
+    if heading_dim is None:
+        return
+    if heading_dim == 4 and not args.enable_heading_model:
+        print("Detected heading model checkpoint; enabling body-frame heading model for loading.")
+        train_cfg.depth_encoder.enable_heading_model = True
+        train_cfg.depth_encoder.heading_mode = "body_vec_current_next"
+        train_cfg.depth_encoder.heading_dim = 4
+    elif heading_dim == 2 and not args.enable_heading_model:
+        train_cfg.depth_encoder.enable_heading_model = False
+        train_cfg.depth_encoder.heading_dim = 2
+
+
 class TaskRegistry():
     def __init__(self):
         self.task_classes = {}
@@ -144,6 +176,15 @@ class TaskRegistry():
         else:
             log_dir = log_root#os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
         
+        resume = train_cfg.runner.resume
+        resume_path = None
+        if args.resumeid:
+            log_root = LEGGED_GYM_ROOT_DIR + f"/logs/{args.proj_name}/" + args.resumeid
+            resume = True
+        if resume:
+            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
+            _apply_checkpoint_heading_cfg(train_cfg, resume_path, args)
+
         train_cfg_dict = class_to_dict(train_cfg)
         runner = OnPolicyRunner(env, 
                                 train_cfg_dict, 
@@ -151,16 +192,11 @@ class TaskRegistry():
                                 init_wandb=init_wandb,
                                 device=args.rl_device, **kwargs)
         #save resume path before creating a new log_dir
-        resume = train_cfg.runner.resume
-        if args.resumeid:
-            log_root = LEGGED_GYM_ROOT_DIR + f"/logs/{args.proj_name}/" + args.resumeid
-            resume = True
         if resume:
             # load previously trained model
             print(log_root)
             print(train_cfg.runner.load_run)
             # load_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', "rough_a1", train_cfg.runner.load_run)
-            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
             runner.load(resume_path)
             if not train_cfg.policy.continue_from_last_std:
                 runner.alg.actor_critic.reset_std(train_cfg.policy.init_noise_std, 12, device=runner.device)
