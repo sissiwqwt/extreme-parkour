@@ -30,6 +30,7 @@
 
 import os
 import copy
+import json
 import torch
 import numpy as np
 import random
@@ -250,6 +251,37 @@ def export_policy_as_jit(actor_critic, path, name):
         model = copy.deepcopy(actor_critic.actor).to('cpu')
         traced_script_module = torch.jit.script(model)
         traced_script_module.save(path)
+
+
+def build_terrain_summary(terrain_cfg):
+    terrain_dict = dict(getattr(terrain_cfg, "terrain_dict", {}))
+    active_terrains = {
+        terrain_name: proportion
+        for terrain_name, proportion in terrain_dict.items()
+        if proportion > 0
+    }
+    num_rows = int(getattr(terrain_cfg, "num_rows"))
+    denominator = max(num_rows - 1, 1)
+
+    return {
+        "active_terrains": active_terrains,
+        "curriculum": bool(getattr(terrain_cfg, "curriculum", False)),
+        "difficulty_formula": "terrain_level / (num_rows - 1)",
+        "difficulty_range": [0.0, float((num_rows - 1) / denominator)],
+        "max_init_terrain_level": int(getattr(terrain_cfg, "max_init_terrain_level", 0)),
+        "num_cols": int(getattr(terrain_cfg, "num_cols")),
+        "num_rows": num_rows,
+        "task_targeted_curriculum": bool(getattr(terrain_cfg, "task_targeted_curriculum", False)),
+        "terrain_dict": terrain_dict,
+    }
+
+
+def write_terrain_summary_json(output_dir, terrain_cfg, filename="terrain_summary.json"):
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, filename)
+    with open(output_path, "w") as summary_file:
+        json.dump(build_terrain_summary(terrain_cfg), summary_file, indent=2)
+    return output_path
 
 
 class PolicyExporterLSTM(torch.nn.Module):
