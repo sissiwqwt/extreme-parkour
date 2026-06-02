@@ -48,34 +48,8 @@ sim_params.physx.use_gpu = False
 sim_params.physx.num_threads = 4
 
 
-ALL_DISTILL_TERRAINS = (
-    # "smooth slope",
-    # "rough slope up",
-    # "rough slope down",
-    # "rough stairs up",
-    # "rough stairs down",
-    # "discrete",
-    # "stepping stones",
-    # "gaps",
-    # "smooth flat",
-    # "pit",
-    # "wall",
-    # "platform",
-    # "large stairs up",
-    # "large stairs down",
-    # "parkour",
-    # "parkour_hurdle",
-    # "parkour_flat",
-    # "parkour_step",
-    # "parkour_gap",
-    # "alternating_step",
-    # "beam_gap",
-    # "asymmetric_gap",
-    "parkour_v2",
-    # "narrow_gap",
-    # "climbing_wall",
-    # "demo",
-)
+DEFAULT_DISTILL_TERRAIN = "parkour_v2"
+DEFAULT_TERRAIN_DIFFICULTY = 1.0
 
 
 def _pop_script_argv():
@@ -96,8 +70,14 @@ def _pop_script_argv():
     p.add_argument(
         "--record_env",
         type=int,
-        default=0,
-        help="Which parallel env index to read the tracking camera from.",
+        default=None,
+        help="Which parallel env index to record. Default: record all parallel envs.",
+    )
+    p.add_argument(
+        "--terrain_name",
+        type=str,
+        default=DEFAULT_DISTILL_TERRAIN,
+        help=f"Single terrain name to play. Default: {DEFAULT_DISTILL_TERRAIN}.",
     )
     p.add_argument(
         "--record_camera",
@@ -162,6 +142,11 @@ def _pop_script_argv():
         help="Enable GPU simulation and RL. Default: False (CPU only, safer).",
     )
     ns, rest = p.parse_known_args()
+    ns.terrain_name = ns.terrain_name.strip()
+    if not ns.terrain_name:
+        raise ValueError("--terrain_name must not be empty")
+    if ns.terrain_level is None and ns.terrain_difficulty is None:
+        ns.terrain_difficulty = DEFAULT_TERRAIN_DIFFICULTY
     sys.argv = [sys.argv[0]] + rest
     return ns
 
@@ -213,14 +198,14 @@ def _default_video_path(env_cfg, checkpoint):
     return os.path.join(demos_dir, f"{terrain}_distill_{checkpoint}.mp4")
 
 
-def _distill_terrain_dict():
-    return {terrain_name: 1.0 for terrain_name in ALL_DISTILL_TERRAINS}
+def _distill_terrain_dict(terrain_name):
+    return {terrain_name: 1.0}
 
 
 def _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty):
     env_cfg.terrain.terrain_dict = dict(terrain_dict)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
-    env_cfg.terrain.num_cols = len(env_cfg.terrain.terrain_dict)
+    env_cfg.terrain.num_cols = 1
     if terrain_difficulty is not None:
         env_cfg.terrain.num_rows = 1
         env_cfg.terrain.fixed_difficulty = float(terrain_difficulty)
@@ -302,6 +287,23 @@ def _apply_fixed_terrain_level(env, terrain_level):
     env._refresh_terrain_state()
     env_ids = torch.arange(env.num_envs, device=env.device)
     env.reset_idx(env_ids)
+
+
+def _record_env_ids(rec_cfg, num_envs):
+    if rec_cfg.record_env is None:
+        return list(range(num_envs))
+    if rec_cfg.record_env < 0 or rec_cfg.record_env >= num_envs:
+        raise ValueError(
+            f"--record_env {rec_cfg.record_env} out of range [0, {num_envs - 1}]"
+        )
+    return [rec_cfg.record_env]
+
+
+def _video_path_for_env(video_path, env_id, record_all):
+    if not record_all:
+        return video_path
+    root, ext = os.path.splitext(video_path)
+    return f"{root}_env{env_id}{ext or '.mp4'}"
 
 
 def _rgba_to_bgr(rgba):
@@ -418,12 +420,14 @@ def play_headless_record(args, rec_cfg):
     env_cfg.commands.resampling_time = 60
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.height = [0.02, 0.02]
-    terrain_dict = _distill_terrain_dict()
+    terrain_dict = _distill_terrain_dict(rec_cfg.terrain_name)
     terrain_difficulty = _requested_terrain_difficulty(rec_cfg)
     _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty)
 
-    min_num_envs = max(len(terrain_dict), rec_cfg.record_env + 1)
-    args.num_envs = min_num_envs if args.num_envs is None else max(args.num_envs, min_num_envs)
+    min_num_envs = 1 if rec_cfg.record_env is None else rec_cfg.record_env + 1
+    args.num_envs = (
+        min_num_envs if args.num_envs is None else max(args.num_envs, min_num_envs)
+    )
     env_cfg.env.num_envs = args.num_envs
 
     terrain_level = _requested_terrain_level(rec_cfg, env_cfg.terrain.num_rows)
@@ -478,22 +482,21 @@ def play_headless_record(args, rec_cfg):
             "Environment has no camera handles; enable depth camera in config / `--use_camera`."
         )
 
-    if rec_cfg.record_env < 0 or rec_cfg.record_env >= env.num_envs:
-        raise ValueError(
-            f"--record_env {rec_cfg.record_env} out of range [0, {env.num_envs - 1}]"
-        )
+    record_env_ids = _record_env_ids(rec_cfg, env.num_envs)
+    record_all = rec_cfg.record_env is None
 
-    third_person_handle = None
-    third_smoothing = None
+    third_person_handles = {}
+    third_smoothing = {}
     if rec_cfg.record_camera == "third_person":
-        third_person_handle = _create_third_person_camera(
-            env,
-            rec_cfg.record_env,
-            rec_cfg.record_width,
-            rec_cfg.record_height,
-            horizontal_fov=getattr(env.cfg.depth, "horizontal_fov", None),
-        )
-        third_smoothing = _SmoothedThirdPersonCam(rec_cfg.camera_smooth)
+        for env_id in record_env_ids:
+            third_person_handles[env_id] = _create_third_person_camera(
+                env,
+                env_id,
+                rec_cfg.record_width,
+                rec_cfg.record_height,
+                horizontal_fov=getattr(env.cfg.depth, "horizontal_fov", None),
+            )
+            third_smoothing[env_id] = _SmoothedThirdPersonCam(rec_cfg.camera_smooth)
 
     train_cfg.runner.resume = True
     ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(
@@ -545,26 +548,34 @@ def play_headless_record(args, rec_cfg):
         else float(round(1.0 / env.dt, 3))
     )
 
-    def _record_frame():
+    def _record_frame(env_id):
         if rec_cfg.record_camera == "third_person":
             return _grab_third_person_rgb(
                 env,
-                rec_cfg.record_env,
-                third_person_handle,
-                third_smoothing,
+                env_id,
+                third_person_handles[env_id],
+                third_smoothing[env_id],
                 rec_cfg.third_dist,
                 rec_cfg.third_height,
                 rec_cfg.third_lookat_z,
             )
-        return _grab_body_camera_rgb(env, rec_cfg.record_env)
+        return _grab_body_camera_rgb(env, env_id)
 
-    first = _record_frame()
-    h, w = first.shape[:2]
+    writers = {}
+    video_paths = {}
+    first_frames = {}
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(video_path, fourcc, fps, (w, h))
-    if not writer.isOpened():
-        raise RuntimeError(f"Failed to open VideoWriter for {video_path}")
-    writer.write(first)
+    for env_id in record_env_ids:
+        env_video_path = _video_path_for_env(video_path, env_id, record_all)
+        first = _record_frame(env_id)
+        h, w = first.shape[:2]
+        writer = cv2.VideoWriter(env_video_path, fourcc, fps, (w, h))
+        if not writer.isOpened():
+            raise RuntimeError(f"Failed to open VideoWriter for {env_video_path}")
+        writer.write(first)
+        writers[env_id] = writer
+        video_paths[env_id] = env_video_path
+        first_frames[env_id] = (w, h)
     mode_desc = (
         f"third_person (smooth α={rec_cfg.camera_smooth}, "
         f"dist={rec_cfg.third_dist}, h={rec_cfg.third_height})"
@@ -572,11 +583,14 @@ def play_headless_record(args, rec_cfg):
         else "body-mounted depth camera"
     )
     print(
-        f"Recording env {rec_cfg.record_env} ({mode_desc}) → {video_path} @ {fps} FPS, {w}x{h}"
+        f"Recording envs {record_env_ids} ({mode_desc}) @ {fps} FPS."
     )
+    for env_id in record_env_ids:
+        w, h = first_frames[env_id]
+        print(f"  env {env_id} → {video_paths[env_id]} ({w}x{h})")
     print(
-        f"Running {len(env_cfg.terrain.terrain_dict)} terrain types across "
-        f"{env_cfg.terrain.num_cols} columns and {env.num_envs} envs."
+        f"Running terrain '{rec_cfg.terrain_name}' across "
+        f"{env_cfg.terrain.num_cols} column and {env.num_envs} envs."
     )
     if terrain_difficulty is not None:
         print(f"Using fixed terrain difficulty {terrain_difficulty:.2f}.")
@@ -643,7 +657,8 @@ def play_headless_record(args, rec_cfg):
 
             obs, _, _, _, infos = env.step(actions.detach())
 
-            writer.write(_record_frame())
+            for env_id in record_env_ids:
+                writers[env_id].write(_record_frame(env_id))
 
             # print(
             #     "time:",
@@ -654,8 +669,9 @@ def play_headless_record(args, rec_cfg):
             #     env.base_lin_vel[env.lookat_id, 0].item(),
             # )
     finally:
-        writer.release()
-        print("Video writer closed.")
+        for writer in writers.values():
+            writer.release()
+        print("Video writers closed.")
 
 
 if __name__ == "__main__":
