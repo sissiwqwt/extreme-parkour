@@ -276,6 +276,182 @@ python legged_gym/scripts/train.py \
 
 该命令保持原始 depth distillation 行为。
 
+## Heading-only 实验命令
+
+这一组命令用于只比较 heading model 的影响：
+
+```text
+curriculum = True
+task_targeted_curriculum = False
+wandb = enabled
+```
+
+注意不要添加 `--no_wandb`，否则 wandb 会被关闭。运行前请确认远端主机已经完成 wandb 登录，或设置了 `WANDB_API_KEY`。
+
+把下面命令中的 `TEACHER_OR_BASE_RUN_ID` 替换成 teacher/base checkpoint 所在 run 名。
+
+### 1. 测速 Baseline：不开 Heading
+
+建议先跑 50 iteration 看常规参数速度：
+
+```bash
+python legged_gym/legged_gym/scripts/train.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --proj_name parkour_heading \
+  --exptid speed_heading_off_50 \
+  --use_camera \
+  --resume \
+  --resumeid TEACHER_OR_BASE_RUN_ID \
+  --checkpoint -1 \
+  --curriculum True \
+  --task_targeted_curriculum False \
+  --max_iterations 50
+```
+
+### 2. 测速 Heading：启用新 Heading
+
+```bash
+python legged_gym/legged_gym/scripts/train.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --proj_name parkour_heading \
+  --exptid speed_heading_on_50_pre10 \
+  --use_camera \
+  --enable_heading_model \
+  --heading_pretrain_iters 10 \
+  --heading_loss_weight 1.0 \
+  --action_loss_weight 1.0 \
+  --resume \
+  --resumeid TEACHER_OR_BASE_RUN_ID \
+  --checkpoint -1 \
+  --curriculum True \
+  --task_targeted_curriculum False \
+  --max_iterations 50
+```
+
+### 3. 正式训练 Baseline：不开 Heading
+
+测速确认正常后，用同样 curriculum 设置拉长训练：
+
+```bash
+python legged_gym/legged_gym/scripts/train.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --proj_name parkour_heading \
+  --exptid baseline_heading_off_5000 \
+  --use_camera \
+  --resume \
+  --resumeid TEACHER_OR_BASE_RUN_ID \
+  --checkpoint -1 \
+  --curriculum True \
+  --task_targeted_curriculum False \
+  --max_iterations 5000
+```
+
+### 4. 正式训练 Heading：启用新 Heading
+
+```bash
+python legged_gym/legged_gym/scripts/train.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --proj_name parkour_heading \
+  --exptid heading_on_5000_pre1000 \
+  --use_camera \
+  --enable_heading_model \
+  --heading_pretrain_iters 1000 \
+  --heading_loss_weight 1.0 \
+  --action_loss_weight 1.0 \
+  --resume \
+  --resumeid TEACHER_OR_BASE_RUN_ID \
+  --checkpoint -1 \
+  --curriculum True \
+  --task_targeted_curriculum False \
+  --max_iterations 5000
+```
+
+### 5. 播放 Heading Checkpoint
+
+```bash
+python legged_gym/legged_gym/scripts/play.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --use_camera \
+  --proj_name parkour_heading \
+  --exptid heading_on_5000_pre1000 \
+  --checkpoint -1 \
+  --enable_heading_model \
+  --headless \
+  --play_steps 1000
+```
+
+`play.py` 会自动识别 heading checkpoint；这里仍显式传 `--enable_heading_model`，方便命令含义更清楚。
+
+### 6. 评估 Heading Checkpoint
+
+```bash
+python legged_gym/legged_gym/scripts/evaluation.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --use_camera \
+  --proj_name parkour_heading \
+  --exptid heading_on_5000_pre1000 \
+  --checkpoint -1 \
+  --enable_heading_model \
+  --policy_type depth \
+  --terrain_set effective \
+  --eval_episodes 1000
+```
+
+### 7. 评估 Baseline Checkpoint
+
+```bash
+python legged_gym/legged_gym/scripts/evaluation.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --use_camera \
+  --proj_name parkour_heading \
+  --exptid baseline_heading_off_5000 \
+  --checkpoint -1 \
+  --policy_type depth \
+  --terrain_set effective \
+  --eval_episodes 1000
+```
+
+### 观察指标
+
+训练阶段主要看 wandb：
+
+```text
+Perf/total_fps
+Perf/collection time
+Perf/learning_time
+Loss_depth/heading
+Loss_depth/depth_actor
+Loss_depth/heading_pretrain
+Train/mean_reward
+Episode_rew/*
+```
+
+评估阶段主要看 `evaluation.py` 输出的 CSV / JSON：
+
+```text
+success_rate
+fall_rate
+mean_mxd
+mean_normalized_waypoints
+mean_episode_length
+mean_edge_violation
+mean_heading_loss
+```
+
 ### 启用新 Heading Model
 
 建议启用时一定设置非零 heading pretrain iterations：
