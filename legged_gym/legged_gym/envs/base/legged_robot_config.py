@@ -184,11 +184,17 @@ class LeggedRobotCfg(BaseConfig):
                         "platform": 0.,
                         "large stairs up": 0.,
                         "large stairs down": 0.,
-                        "parkour": 0.2,
-                        "parkour_hurdle": 0.2,
-                        "parkour_flat": 0.2,
-                        "parkour_step": 0.2,
-                        "parkour_gap": 0.2,
+                        "parkour": 0.15,
+                        "parkour_hurdle": 0.1,
+                        "parkour_flat": 0.1,
+                        "parkour_step": 0.1,
+                        "parkour_gap": 0.1,
+                        "alternating_step": 0.1,
+                        "beam_gap": 0.1,
+                        "asymmetric_gap": 0.1,
+                        "parkour_v2": 0.15,
+                        "narrow_gap": 0.1,
+                        "climbing_wall": 0.1,
                         "demo": 0.0,}
         terrain_proportions = list(terrain_dict.values())
         

@@ -43,7 +43,8 @@ from typing import Tuple, Dict
 
 from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
-from legged_gym.utils.terrain import Terrain
+# from legged_gym.utils.terrain import Terrain
+from legged_gym.utils.terrain_ver2 import Terrain
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
 from scipy.spatial.transform import Rotation as R
