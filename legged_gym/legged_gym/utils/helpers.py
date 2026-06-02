@@ -166,6 +166,36 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.terrain.curriculum = args.curriculum
         if args.task_targeted_curriculum is not None:
             env_cfg.terrain.task_targeted_curriculum = args.task_targeted_curriculum
+        task_curriculum_arg_names = [
+            "task_curriculum_dynamic_window",
+            "task_curriculum_window_start",
+            "task_curriculum_window_end",
+            "task_curriculum_window_warmup_iters",
+            "task_curriculum_dynamic_min_samples",
+            "task_curriculum_min_samples_start",
+            "task_curriculum_min_samples_end",
+            "task_curriculum_min_samples_warmup_iters",
+            "task_curriculum_dynamic_thresholds",
+            "task_curriculum_up_threshold_start",
+            "task_curriculum_up_threshold_end",
+            "task_curriculum_down_threshold_start",
+            "task_curriculum_down_threshold_end",
+            "task_curriculum_threshold_warmup_iters",
+            "task_curriculum_prioritized_sampling",
+            "task_curriculum_pause_solved_tasks",
+            "task_curriculum_pause_success_threshold",
+            "task_curriculum_resume_success_threshold",
+            "task_curriculum_min_sampling_weight",
+            "task_curriculum_priority_alpha",
+            "task_curriculum_lagged_level_noise",
+            "task_curriculum_lag_success_gap",
+            "task_curriculum_lag_level_noise_prob",
+            "task_curriculum_lag_level_noise_levels",
+        ]
+        for arg_name in task_curriculum_arg_names:
+            arg_value = getattr(args, arg_name, None)
+            if arg_value is not None:
+                setattr(env_cfg.terrain, arg_name, arg_value)
         if args.delay:
             env_cfg.domain_rand.action_delay = args.delay
         if not args.delay and not args.resume and not args.use_camera and args.headless: # if train from scratch
@@ -251,7 +281,31 @@ def get_args():
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
         {"name": "--curriculum", "type": parse_bool, "default": None, "help": "Enable or disable terrain curriculum. Example: --curriculum False"},
-        {"name": "--task_targeted_curriculum", "type": parse_bool, "default": None, "help": "Enable or disable task-targeted terrain curriculum. Example: --task_targeted_curriculum False"}
+        {"name": "--task_targeted_curriculum", "type": parse_bool, "default": None, "help": "Enable or disable task-targeted terrain curriculum. Example: --task_targeted_curriculum False"},
+        {"name": "--task_curriculum_dynamic_window", "type": parse_bool, "default": None, "help": "Enable dynamic task curriculum window."},
+        {"name": "--task_curriculum_window_start", "type": int, "help": "Initial dynamic task curriculum window."},
+        {"name": "--task_curriculum_window_end", "type": int, "help": "Final dynamic task curriculum window."},
+        {"name": "--task_curriculum_window_warmup_iters", "type": int, "help": "Iterations used to warm up the dynamic task curriculum window."},
+        {"name": "--task_curriculum_dynamic_min_samples", "type": parse_bool, "default": None, "help": "Enable dynamic task curriculum min samples."},
+        {"name": "--task_curriculum_min_samples_start", "type": int, "help": "Initial dynamic task curriculum min samples."},
+        {"name": "--task_curriculum_min_samples_end", "type": int, "help": "Final dynamic task curriculum min samples."},
+        {"name": "--task_curriculum_min_samples_warmup_iters", "type": int, "help": "Iterations used to warm up dynamic task curriculum min samples."},
+        {"name": "--task_curriculum_dynamic_thresholds", "type": parse_bool, "default": None, "help": "Enable dynamic task curriculum thresholds."},
+        {"name": "--task_curriculum_up_threshold_start", "type": float, "help": "Initial TTC up threshold."},
+        {"name": "--task_curriculum_up_threshold_end", "type": float, "help": "Final TTC up threshold."},
+        {"name": "--task_curriculum_down_threshold_start", "type": float, "help": "Initial TTC down threshold."},
+        {"name": "--task_curriculum_down_threshold_end", "type": float, "help": "Final TTC down threshold."},
+        {"name": "--task_curriculum_threshold_warmup_iters", "type": int, "help": "Iterations used to warm up dynamic TTC thresholds."},
+        {"name": "--task_curriculum_prioritized_sampling", "type": parse_bool, "default": None, "help": "Enable prioritized TTC task sampling."},
+        {"name": "--task_curriculum_pause_solved_tasks", "type": parse_bool, "default": None, "help": "Enable solved-task pause hysteresis."},
+        {"name": "--task_curriculum_pause_success_threshold", "type": float, "help": "Success rate above which a task is treated as solved."},
+        {"name": "--task_curriculum_resume_success_threshold", "type": float, "help": "Success rate below which a paused task resumes normal sampling."},
+        {"name": "--task_curriculum_min_sampling_weight", "type": float, "help": "Minimum sampling weight for paused or easy tasks."},
+        {"name": "--task_curriculum_priority_alpha", "type": float, "help": "Exponent for difficulty-based task sampling."},
+        {"name": "--task_curriculum_lagged_level_noise", "type": parse_bool, "default": None, "help": "Enable harder-level noise for tasks lagging behind the best success rate."},
+        {"name": "--task_curriculum_lag_success_gap", "type": float, "help": "Success-rate gap that marks a task as lagging."},
+        {"name": "--task_curriculum_lag_level_noise_prob", "type": float, "help": "Probability of temporarily boosting level for lagging-task reset samples."},
+        {"name": "--task_curriculum_lag_level_noise_levels", "type": int, "help": "Temporary level boost applied to lagging-task reset samples."}
 
 
     ]

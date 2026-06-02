@@ -188,6 +188,8 @@ class OnPolicyRunner:
 
         for it in range(self.current_learning_iteration, tot_iter):
             self.current_learning_iteration = it
+            if hasattr(self.env, "set_curriculum_iteration"):
+                self.env.set_curriculum_iteration(it)
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0
 

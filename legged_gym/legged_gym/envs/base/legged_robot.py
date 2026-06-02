@@ -46,7 +46,11 @@ from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.terrain import Terrain
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
-from legged_gym.utils.task_targeted_curriculum import update_task_targeted_curriculum
+from legged_gym.utils.task_targeted_curriculum import (
+    compute_task_sampling_weights,
+    update_task_pause_state,
+    update_task_targeted_curriculum,
+)
 from scipy.spatial.transform import Rotation as R
 from .legged_robot_config import LeggedRobotCfg
 
@@ -93,6 +97,7 @@ class LeggedRobot(BaseTask):
         self.cfg = cfg
         self.sim_params = sim_params
         self.height_samples = None
+        self.curriculum_iteration = 0
         self.debug_viz = True
         self.init_done = False
         self._parse_cfg(self.cfg)
@@ -359,8 +364,19 @@ class LeggedRobot(BaseTask):
                 active_tasks = self.task_curriculum_active_ids
                 self.extras["episode"]["terrain_task_level"] = torch.mean(self.task_curriculum_levels[active_tasks].float())
                 self.extras["episode"]["terrain_task_success_rate"] = torch.mean(self.task_curriculum_success_rates[active_tasks])
+                self.extras["episode"]["terrain_task_effective_window"] = torch.tensor(float(self.task_curriculum_effective_window), device=self.device)
+                self.extras["episode"]["terrain_task_effective_min_samples"] = torch.tensor(float(self.task_curriculum_effective_min_samples), device=self.device)
+                self.extras["episode"]["terrain_task_effective_up_threshold"] = torch.tensor(float(self.task_curriculum_effective_up_threshold), device=self.device)
+                self.extras["episode"]["terrain_task_effective_down_threshold"] = torch.tensor(float(self.task_curriculum_effective_down_threshold), device=self.device)
+                self.extras["episode"]["terrain_task_sampling_weight_mean"] = torch.mean(self.task_curriculum_sampling_weights[active_tasks])
+                self.extras["episode"]["terrain_task_num_paused"] = torch.sum(self.task_curriculum_paused[active_tasks].float())
+                self.extras["episode"]["terrain_task_num_lagging"] = torch.sum(self.task_curriculum_lagging[active_tasks].float())
+                self.extras["episode"]["terrain_task_lag_boosted_envs"] = self.task_curriculum_lag_boosted_envs
                 for task_id in active_tasks:
                     task_idx = int(task_id.item())
+                    self.extras["episode"][f"terrain_task_{task_idx}_paused"] = self.task_curriculum_paused[task_idx].float()
+                    self.extras["episode"][f"terrain_task_{task_idx}_lagging"] = self.task_curriculum_lagging[task_idx].float()
+                    self.extras["episode"][f"terrain_task_{task_idx}_sampling_weight"] = self.task_curriculum_sampling_weights[task_idx]
                     self.extras["episode"][f"terrain_task_{task_idx}_level"] = self.task_curriculum_levels[task_idx].float()
                     self.extras["episode"][f"terrain_task_{task_idx}_success_rate"] = self.task_curriculum_success_rates[task_idx]
                     self.extras["episode"][f"terrain_task_{task_idx}_samples"] = self.task_curriculum_counts[task_idx].float()
@@ -676,6 +692,145 @@ class LeggedRobot(BaseTask):
         self.root_states[:, 7:9] = torch_rand_float(-max_vel, max_vel, (self.num_envs, 2), device=self.device) # lin vel x/y
         self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
 
+    def set_curriculum_iteration(self, iteration):
+        self.curriculum_iteration = int(iteration)
+
+    def _linear_curriculum_value(self, start, end, warmup_iters, round_value=False):
+        if warmup_iters <= 0:
+            value = end
+        else:
+            progress = np.clip(self.curriculum_iteration / warmup_iters, 0.0, 1.0)
+            value = start + progress * (end - start)
+        return int(round(value)) if round_value else float(value)
+
+    def _get_task_curriculum_buffer_capacity(self):
+        if getattr(self.cfg.terrain, "task_curriculum_dynamic_window", False):
+            return max(
+                int(self.cfg.terrain.task_curriculum_window),
+                int(self.cfg.terrain.task_curriculum_window_start),
+                int(self.cfg.terrain.task_curriculum_window_end),
+            )
+        return int(self.cfg.terrain.task_curriculum_window)
+
+    def _get_effective_task_curriculum_window(self):
+        if getattr(self.cfg.terrain, "task_curriculum_dynamic_window", False):
+            return self._linear_curriculum_value(
+                self.cfg.terrain.task_curriculum_window_start,
+                self.cfg.terrain.task_curriculum_window_end,
+                self.cfg.terrain.task_curriculum_window_warmup_iters,
+                round_value=True,
+            )
+        return int(self.cfg.terrain.task_curriculum_window)
+
+    def _get_effective_task_curriculum_min_samples(self):
+        if getattr(self.cfg.terrain, "task_curriculum_dynamic_min_samples", False):
+            return self._linear_curriculum_value(
+                self.cfg.terrain.task_curriculum_min_samples_start,
+                self.cfg.terrain.task_curriculum_min_samples_end,
+                self.cfg.terrain.task_curriculum_min_samples_warmup_iters,
+                round_value=True,
+            )
+        return int(self.cfg.terrain.task_curriculum_min_samples)
+
+    def _get_effective_task_curriculum_thresholds(self):
+        if getattr(self.cfg.terrain, "task_curriculum_dynamic_thresholds", False):
+            up_threshold = self._linear_curriculum_value(
+                self.cfg.terrain.task_curriculum_up_threshold_start,
+                self.cfg.terrain.task_curriculum_up_threshold_end,
+                self.cfg.terrain.task_curriculum_threshold_warmup_iters,
+            )
+            down_threshold = self._linear_curriculum_value(
+                self.cfg.terrain.task_curriculum_down_threshold_start,
+                self.cfg.terrain.task_curriculum_down_threshold_end,
+                self.cfg.terrain.task_curriculum_threshold_warmup_iters,
+            )
+            return up_threshold, down_threshold
+        return self.cfg.terrain.task_curriculum_up_threshold, self.cfg.terrain.task_curriculum_down_threshold
+
+    def _refresh_task_sampling_weights(self):
+        self.task_curriculum_sampling_weights[:] = compute_task_sampling_weights(
+            success_rates=self.task_curriculum_success_rates,
+            paused=self.task_curriculum_paused,
+            active_ids=self.task_curriculum_active_ids,
+            base_weights=self.task_curriculum_base_weights,
+            prioritized_sampling=getattr(self.cfg.terrain, "task_curriculum_prioritized_sampling", False),
+            pause_solved_tasks=getattr(self.cfg.terrain, "task_curriculum_pause_solved_tasks", False),
+            min_sampling_weight=self.cfg.terrain.task_curriculum_min_sampling_weight,
+            priority_alpha=self.cfg.terrain.task_curriculum_priority_alpha,
+        )
+
+    def _update_task_pause_state(self):
+        if not getattr(self.cfg.terrain, "task_curriculum_pause_solved_tasks", False):
+            self.task_curriculum_paused[:] = False
+            return
+        update_task_pause_state(
+            success_rates=self.task_curriculum_success_rates,
+            counts=self.task_curriculum_counts,
+            paused=self.task_curriculum_paused,
+            active_ids=self.task_curriculum_active_ids,
+            min_samples=self.task_curriculum_effective_min_samples,
+            pause_threshold=self.cfg.terrain.task_curriculum_pause_success_threshold,
+            resume_threshold=self.cfg.terrain.task_curriculum_resume_success_threshold,
+        )
+
+    def _update_lagging_task_state(self):
+        self.task_curriculum_lagging[:] = False
+        if not getattr(self.cfg.terrain, "task_curriculum_lagged_level_noise", False):
+            return
+
+        enough_samples = self.task_curriculum_counts >= self.task_curriculum_effective_min_samples
+        valid_tasks = self.task_curriculum_active_ids[enough_samples[self.task_curriculum_active_ids]]
+        if valid_tasks.numel() <= 1:
+            return
+
+        best_success_rate = torch.max(self.task_curriculum_success_rates[valid_tasks])
+        success_gap = best_success_rate - self.task_curriculum_success_rates[valid_tasks]
+        lagging_tasks = valid_tasks[success_gap >= self.cfg.terrain.task_curriculum_lag_success_gap]
+        self.task_curriculum_lagging[lagging_tasks] = True
+
+    def _apply_lagged_task_level_noise(self, env_ids, task_ids, levels):
+        self.task_curriculum_lag_boosted_envs = torch.tensor(0.0, device=self.device)
+        if not getattr(self.cfg.terrain, "task_curriculum_lagged_level_noise", False):
+            return levels
+
+        lagging_envs = self.task_curriculum_lagging[task_ids]
+        if not torch.any(lagging_envs):
+            return levels
+
+        # Lagging tasks keep their persistent TTC level, but half of their reset samples
+        # are temporarily moved to a harder row to pressure the policy toward progress.
+        noise_prob = self.cfg.terrain.task_curriculum_lag_level_noise_prob
+        noise_mask = lagging_envs & (torch.rand(len(env_ids), device=self.device) < noise_prob)
+        if not torch.any(noise_mask):
+            return levels
+
+        boosted_levels = levels.clone()
+        boost_levels = int(self.cfg.terrain.task_curriculum_lag_level_noise_levels)
+        boosted_levels[noise_mask] = torch.clamp(boosted_levels[noise_mask] + boost_levels, max=self.max_terrain_level - 1)
+        self.task_curriculum_lag_boosted_envs = torch.sum(noise_mask.float())
+        return boosted_levels
+
+    def _sample_task_targeted_terrain_types(self, env_ids):
+        if not getattr(self.cfg.terrain, "task_curriculum_prioritized_sampling", False):
+            return
+
+        active_weights = self.task_curriculum_sampling_weights[self.task_curriculum_active_ids]
+        if active_weights.sum() <= 0:
+            active_weights = torch.ones_like(active_weights) / active_weights.numel()
+        sampled_task_indices = torch.multinomial(active_weights, len(env_ids), replacement=True)
+        sampled_tasks = self.task_curriculum_active_ids[sampled_task_indices]
+
+        for task_id in torch.unique(sampled_tasks):
+            task_mask = sampled_tasks == task_id
+            selected_env_ids = env_ids[task_mask]
+            columns = self.task_curriculum_columns[int(task_id.item())]
+            if columns.numel() == 0:
+                continue
+            column_ids = columns[torch.randint(0, columns.numel(), (len(selected_env_ids),), device=self.device)]
+            self.terrain_types[selected_env_ids] = column_ids
+
+        self.terrain_task_ids[env_ids] = self.terrain_column_task_ids[self.terrain_types[env_ids]]
+
     def _update_terrain_curriculum(self, env_ids):
         """ Implements the game-inspired curriculum.
 
@@ -706,8 +861,14 @@ class LeggedRobot(BaseTask):
     def _update_task_targeted_terrain_curriculum(self, env_ids, move_up, move_down):
         task_ids = self.terrain_task_ids[env_ids]
         successes = move_up.float()
+        self.task_curriculum_effective_window = self._get_effective_task_curriculum_window()
+        self.task_curriculum_effective_min_samples = self._get_effective_task_curriculum_min_samples()
+        (
+            self.task_curriculum_effective_up_threshold,
+            self.task_curriculum_effective_down_threshold,
+        ) = self._get_effective_task_curriculum_thresholds()
 
-        success_rates, updated_tasks = update_task_targeted_curriculum(
+        success_rates, updated_tasks, observed_tasks = update_task_targeted_curriculum(
             task_ids=task_ids,
             successes=successes,
             success_buf=self.task_curriculum_success_buf,
@@ -715,15 +876,21 @@ class LeggedRobot(BaseTask):
             update_counts=self.task_curriculum_update_counts,
             write_idx=self.task_curriculum_write_idx,
             levels=self.task_curriculum_levels,
-            window=self.task_curriculum_window,
-            min_samples=self.task_curriculum_min_samples,
-            up_threshold=self.cfg.terrain.task_curriculum_up_threshold,
-            down_threshold=self.cfg.terrain.task_curriculum_down_threshold,
+            window=self.task_curriculum_effective_window,
+            min_samples=self.task_curriculum_effective_min_samples,
+            up_threshold=self.task_curriculum_effective_up_threshold,
+            down_threshold=self.task_curriculum_effective_down_threshold,
             max_level=self.max_terrain_level,
         )
-        self.task_curriculum_success_rates[updated_tasks] = success_rates[updated_tasks]
+        self.task_curriculum_success_rates[observed_tasks] = success_rates[observed_tasks]
+        self._update_task_pause_state()
+        self._update_lagging_task_state()
+        self._refresh_task_sampling_weights()
+        self._sample_task_targeted_terrain_types(env_ids)
 
-        self.terrain_levels[env_ids] = self.task_curriculum_levels[task_ids]
+        next_task_ids = self.terrain_task_ids[env_ids]
+        next_levels = self.task_curriculum_levels[next_task_ids]
+        self.terrain_levels[env_ids] = self._apply_lagged_task_level_noise(env_ids, next_task_ids, next_levels)
 
     def _refresh_terrain_state(self, env_ids=None):
         if env_ids is None:
@@ -1107,7 +1274,7 @@ class LeggedRobot(BaseTask):
         self.terrain_task_ids = self.terrain_class[0, self.terrain_types].to(torch.long)
         self.num_terrain_tasks = int(torch.max(self.terrain_task_ids).item()) + 1
         self.task_curriculum_active_ids = torch.unique(self.terrain_task_ids)
-        self.task_curriculum_window = self.cfg.terrain.task_curriculum_window
+        self.task_curriculum_window = self._get_task_curriculum_buffer_capacity()
         self.task_curriculum_min_samples = self.cfg.terrain.task_curriculum_min_samples
 
         self.task_curriculum_levels = torch.randint(
@@ -1128,6 +1295,25 @@ class LeggedRobot(BaseTask):
         self.task_curriculum_update_counts = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.long)
         self.task_curriculum_write_idx = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.long)
         self.task_curriculum_success_rates = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.float)
+        self.task_curriculum_paused = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.bool)
+        self.task_curriculum_lagging = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.bool)
+        self.task_curriculum_sampling_weights = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.float)
+        self.task_curriculum_lag_boosted_envs = torch.tensor(0.0, device=self.device)
+        self.task_curriculum_effective_window = self.cfg.terrain.task_curriculum_window
+        self.task_curriculum_effective_min_samples = self.cfg.terrain.task_curriculum_min_samples
+        self.task_curriculum_effective_up_threshold = self.cfg.terrain.task_curriculum_up_threshold
+        self.task_curriculum_effective_down_threshold = self.cfg.terrain.task_curriculum_down_threshold
+
+        self.terrain_column_task_ids = self.terrain_class[0, torch.arange(self.cfg.terrain.num_cols, device=self.device)].to(torch.long)
+        self.task_curriculum_columns = []
+        self.task_curriculum_base_weights = torch.zeros(self.num_terrain_tasks, device=self.device, dtype=torch.float)
+        for task_id in range(self.num_terrain_tasks):
+            columns = torch.nonzero(self.terrain_column_task_ids == task_id, as_tuple=False).flatten()
+            self.task_curriculum_columns.append(columns)
+            self.task_curriculum_base_weights[task_id] = float(columns.numel())
+        if self.task_curriculum_base_weights[self.task_curriculum_active_ids].sum() > 0:
+            self.task_curriculum_base_weights[self.task_curriculum_active_ids] /= self.task_curriculum_base_weights[self.task_curriculum_active_ids].sum()
+        self._refresh_task_sampling_weights()
 
     def get_terrain_curriculum_state(self):
         if not (self.cfg.terrain.curriculum and getattr(self.cfg.terrain, "task_targeted_curriculum", False)):
@@ -1139,6 +1325,9 @@ class LeggedRobot(BaseTask):
             "task_curriculum_update_counts": self.task_curriculum_update_counts.detach().cpu(),
             "task_curriculum_write_idx": self.task_curriculum_write_idx.detach().cpu(),
             "task_curriculum_success_rates": self.task_curriculum_success_rates.detach().cpu(),
+            "task_curriculum_paused": self.task_curriculum_paused.detach().cpu(),
+            "task_curriculum_lagging": self.task_curriculum_lagging.detach().cpu(),
+            "task_curriculum_sampling_weights": self.task_curriculum_sampling_weights.detach().cpu(),
             "terrain_task_ids": self.terrain_task_ids.detach().cpu(),
             "task_curriculum_active_ids": self.task_curriculum_active_ids.detach().cpu(),
             "task_curriculum_window": self.task_curriculum_window,
@@ -1153,19 +1342,32 @@ class LeggedRobot(BaseTask):
         if loaded_levels.numel() != self.task_curriculum_levels.numel():
             print("Skipping terrain curriculum state: task count does not match current terrain layout.")
             return
-        if int(state.get("task_curriculum_window", self.task_curriculum_window)) != self.task_curriculum_window:
-            print("Skipping terrain curriculum state: window size does not match current config.")
-            return
-
         self.task_curriculum_levels[:] = loaded_levels.to(self.device)
-        self.task_curriculum_success_buf[:] = state["task_curriculum_success_buf"].to(self.device)
-        self.task_curriculum_counts[:] = state["task_curriculum_counts"].to(self.device)
+        loaded_success_buf = state["task_curriculum_success_buf"].to(self.device)
+        if loaded_success_buf.shape != self.task_curriculum_success_buf.shape:
+            print("Terrain curriculum state window capacity differs; loading overlapping history and initializing new slots.")
+        copy_window = min(loaded_success_buf.shape[1], self.task_curriculum_success_buf.shape[1])
+        self.task_curriculum_success_buf[:, :copy_window] = loaded_success_buf[:, :copy_window]
+        self.task_curriculum_counts[:] = torch.clamp(state["task_curriculum_counts"].to(self.device), max=self.task_curriculum_success_buf.shape[1])
         self.task_curriculum_update_counts[:] = state.get(
             "task_curriculum_update_counts",
             torch.zeros_like(self.task_curriculum_update_counts).cpu(),
         ).to(self.device)
-        self.task_curriculum_write_idx[:] = state["task_curriculum_write_idx"].to(self.device)
+        self.task_curriculum_write_idx[:] = state["task_curriculum_write_idx"].to(self.device) % self.task_curriculum_success_buf.shape[1]
         self.task_curriculum_success_rates[:] = state["task_curriculum_success_rates"].to(self.device)
+        self.task_curriculum_paused[:] = state.get(
+            "task_curriculum_paused",
+            torch.zeros_like(self.task_curriculum_paused).cpu(),
+        ).to(self.device)
+        self.task_curriculum_lagging[:] = state.get(
+            "task_curriculum_lagging",
+            torch.zeros_like(self.task_curriculum_lagging).cpu(),
+        ).to(self.device)
+        self.task_curriculum_sampling_weights[:] = state.get(
+            "task_curriculum_sampling_weights",
+            self.task_curriculum_sampling_weights.detach().cpu(),
+        ).to(self.device)
+        self._refresh_task_sampling_weights()
         self.terrain_levels[:] = self.task_curriculum_levels[self.terrain_task_ids]
         self._refresh_terrain_state()
 
