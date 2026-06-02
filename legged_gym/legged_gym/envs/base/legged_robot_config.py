@@ -194,7 +194,7 @@ class LeggedRobotCfg(BaseConfig):
                         "parkour_flat": 0.1,
                         "parkour_step": 0.1,
                         "parkour_gap": 0.1,
-                        "alternating_step": 0.1,
+                        "alternating_step": 0.0,
                         "bean_gap": 0.1,
                         "asymmetric_gap": 0.1,
                         "parkour_v2": 0.15,
