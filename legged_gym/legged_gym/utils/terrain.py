@@ -1330,7 +1330,7 @@ def cliff_side_terrain(
     terrain.height_field_raw[-pad_width:, :] = max(terrain.height_field_raw[-pad_width:, :].max(), pad_height)
 
 
-def parkour_v2_terrain(
+def _parkour_v2_terrain_legacy(
         terrain,
         platform_len=2.5,
         platform_height=0.0,
@@ -1680,6 +1680,335 @@ def parkour_v2_terrain(
     terrain.height_field_raw[:pad_width, :] = np.maximum(terrain.height_field_raw[:pad_width, :], pad_height)
     terrain.height_field_raw[-pad_width:, :] = np.maximum(terrain.height_field_raw[-pad_width:, :], pad_height)
 
+
+
+def parkour_v2_terrain(
+        terrain,
+        platform_len=2.5,
+        platform_height=0.0,
+        num_segments=6,
+        segment_x_range=[1.5, 2.8],
+        difficulty=0.0,
+        num_goals=8,
+        pad_width=0.1,
+        pad_height=0.5):
+    terrain.height_field_raw[:, :] = 0
+    difficulty = np.clip(difficulty, 0.0, 1.0)
+
+    mid_y = terrain.length // 2
+    platform_len_px = round(platform_len / terrain.horizontal_scale)
+    platform_height_px = round(platform_height / terrain.vertical_scale)
+    terrain.height_field_raw[0:platform_len_px, :] = platform_height_px
+
+    goals = [[platform_len_px // 2, mid_y]]
+    cur_x = platform_len_px
+    end_margin_px = max(round(0.5 / terrain.horizontal_scale), 1)
+    gap_depth = -round(np.random.uniform(0.2, 1.0) / terrain.vertical_scale)
+
+    alt_step_height_px = round((0.1 + 0.3 * difficulty) / terrain.vertical_scale)
+    alt_dis_x_min = max(round(0.35 / terrain.horizontal_scale), 1)
+    alt_dis_x_max = max(round(0.8 / terrain.horizontal_scale), alt_dis_x_min + 1)
+    alt_dis_y_min = round(-0.2 / terrain.horizontal_scale)
+    alt_dis_y_max = round(0.2 / terrain.horizontal_scale)
+    alt_half_valid_width = max(int(round(np.random.uniform(0.45, 0.7) / terrain.horizontal_scale)), 1)
+
+    target_beam_width = max(A1_BEAM_GAP_TARGET_WIDTH, A1_TOTAL_WIDTH)
+    beam_width_range = [
+        0.4 + difficulty * (target_beam_width - 0.4),
+        0.8 + difficulty * (target_beam_width - 0.8),
+    ]
+    beam_gap_size_px = max(round((0.25 + 0.5 * difficulty) / terrain.horizontal_scale), 1)
+    beam_dis_x_min = max(round(1.0 / terrain.horizontal_scale), 1)
+    beam_dis_x_max = max(round(1.8 / terrain.horizontal_scale), beam_dis_x_min + 1)
+    beam_y_offset_min = round(-0.04 / terrain.horizontal_scale)
+    beam_y_offset_max = round(0.04 / terrain.horizontal_scale)
+
+    biased_gap_size_px = max(round((0.2 + 0.15 * difficulty) / terrain.horizontal_scale), 1)
+    biased_dis_x_min = max(round(1.0 / terrain.horizontal_scale), 1)
+    biased_dis_x_max = max(round(1.6 / terrain.horizontal_scale), biased_dis_x_min + 1)
+    biased_corridor_half_width = max(int(round((0.6 - 0.1 * difficulty) / terrain.horizontal_scale)), 1)
+    biased_lateral_offset = max(int(round((0.25 + 0.3 * difficulty) / terrain.horizontal_scale)), 1)
+
+    target_corridor_half_width = max(A1_NARROW_GAP_TARGET_WIDTH, A1_TOTAL_WIDTH) / 2.0
+    narrow_corridor_half_width_range = (
+        0.24 + difficulty * (target_corridor_half_width - 0.24),
+        0.32 + difficulty * (target_corridor_half_width - 0.32),
+    )
+    narrow_dis_x_min = max(round(0.8 / terrain.horizontal_scale), 1)
+    narrow_dis_x_max = max(round(1.4 / terrain.horizontal_scale), narrow_dis_x_min + 1)
+    narrow_lateral_offset = max(round(0.75 / terrain.horizontal_scale), 1)
+    narrow_wall_height = round(1.0 / terrain.vertical_scale)
+
+    target_hurdle_height = 0.25 * 1.5
+    hurdle_height_range = [
+        0.18 + difficulty * (target_hurdle_height - 0.18),
+        0.28 + difficulty * (target_hurdle_height - 0.28),
+    ]
+    hurdle_depth_range = [
+        0.45 + difficulty * (0.3 - 0.45),
+        0.70 + difficulty * (0.35 - 0.70),
+    ]
+    top_platform_depth_px = max(round((0.3 - difficulty * 0.1) / terrain.horizontal_scale), 1)
+    wall_dis_x_min = max(round(0.8 / terrain.horizontal_scale), 1)
+    wall_dis_x_max = max(round(1.4 / terrain.horizontal_scale), wall_dis_x_min + 1)
+    wall_dis_y_min = round(-0.4 / terrain.horizontal_scale)
+    wall_dis_y_max = round(0.4 / terrain.horizontal_scale)
+    wall_half_valid_width = max(int(round(np.random.uniform(0.45, 0.8) / terrain.horizontal_scale)), 1)
+
+    def append_goal(goal):
+        if len(goals) < num_goals:
+            goals.append(goal)
+
+    def sample_forward(min_px, max_px):
+        return np.random.randint(min_px, max_px)
+
+    def reserve_goal_slots():
+        return max(num_goals - len(goals) - 1, 0)
+
+    def room_to_continue():
+        return terrain.width - end_margin_px - cur_x
+
+    def add_flat_transition():
+        nonlocal cur_x
+        remaining_len = room_to_continue()
+        if remaining_len <= 0:
+            return
+        transition_len = min(
+            max(round(np.random.uniform(segment_x_range[0], segment_x_range[1]) * 0.2 / terrain.horizontal_scale), 1),
+            remaining_len,
+        )
+        terrain.height_field_raw[cur_x:cur_x + transition_len, :] = platform_height_px
+        cur_x += transition_len
+
+    def clip_center_y(center_y, half_width):
+        return int(np.clip(center_y, half_width + 1, terrain.length - half_width - 1))
+
+    def carve_square(center_x, center_y, pit_half_size, corridor_width, corridor_half_width, start_x, end_x):
+        x0 = max(center_x - pit_half_size, start_x)
+        x1 = min(center_x + pit_half_size + 1, end_x)
+        y0 = max(center_y - pit_half_size, 0)
+        y1 = min(center_y + pit_half_size + 1, terrain.length)
+        terrain.height_field_raw[x0:x1, y0:y1] = platform_height_px
+        cx0 = max(center_x - corridor_half_width, start_x)
+        cx1 = min(cx0 + corridor_width, end_x)
+        cy0 = max(center_y - corridor_half_width, 0)
+        cy1 = min(cy0 + corridor_width, terrain.length)
+        terrain.height_field_raw[cx0:cx1, cy0:cy1] = platform_height_px
+
+    def carve_diagonal_corridor(x0, y0, x1, y1, corridor_width, corridor_half_width, start_x, end_x):
+        num_points = max(abs(x1 - x0), abs(y1 - y0), 1) + 1
+        xs = np.linspace(x0, x1, num_points).round().astype(int)
+        ys = np.linspace(y0, y1, num_points).round().astype(int)
+        for x, y in zip(xs, ys):
+            cx0 = max(x - corridor_half_width, start_x)
+            cx1 = min(cx0 + corridor_width, end_x)
+            cy0 = max(y - corridor_half_width, 0)
+            cy1 = min(cy0 + corridor_width, terrain.length)
+            terrain.height_field_raw[cx0:cx1, cy0:cy1] = platform_height_px
+
+    goal_count_by_type = {
+        "alternating_gap": 2,
+        "beam_gap": 4,
+        "biased_gap": 2,
+        "narrow_gap": 3,
+        "climbing_wall": 3,
+    }
+    min_len_by_type = {
+        "alternating_gap": 2 * alt_dis_x_min,
+        "beam_gap": 2 * beam_dis_x_min + beam_gap_size_px,
+        "biased_gap": 2 * biased_dis_x_min + biased_gap_size_px,
+        "narrow_gap": 3 * narrow_dis_x_min,
+        "climbing_wall": 3 * wall_dis_x_min + 2 * (max(round(hurdle_depth_range[1] / terrain.horizontal_scale), 2) + top_platform_depth_px),
+    }
+
+    segments_built = 0
+    while segments_built < num_segments and reserve_goal_slots() > 0 and room_to_continue() > 0:
+        remaining_goals = reserve_goal_slots()
+        remaining_len = room_to_continue()
+        valid_seg_types = [
+            seg_type
+            for seg_type in goal_count_by_type
+            if goal_count_by_type[seg_type] <= remaining_goals and min_len_by_type[seg_type] <= remaining_len
+        ]
+        if not valid_seg_types:
+            break
+
+        seg_type = np.random.choice(valid_seg_types)
+        start_x = cur_x
+
+        if seg_type == "alternating_gap":
+            step_lengths = [sample_forward(alt_dis_x_min, alt_dis_x_max), sample_forward(alt_dis_x_min, alt_dis_x_max)]
+            seg_end = start_x + sum(step_lengths)
+            if seg_end > terrain.width - end_margin_px:
+                break
+
+            raw_offset = np.random.randint(alt_dis_y_min, alt_dis_y_max + 1)
+            lateral_offset = max(abs(raw_offset), max(round(0.1 / terrain.horizontal_scale), 1))
+            centers_y = [
+                clip_center_y(mid_y + lateral_offset, alt_half_valid_width),
+                clip_center_y(mid_y - lateral_offset, alt_half_valid_width),
+            ]
+
+            local_x = start_x
+            for step_idx, (step_len, center_y) in enumerate(zip(step_lengths, centers_y)):
+                step_end = local_x + step_len
+                cur_h = alt_step_height_px if step_idx == 0 else -alt_step_height_px
+                terrain.height_field_raw[local_x:step_end, :] = cur_h
+                terrain.height_field_raw[local_x:step_end, :max(center_y - alt_half_valid_width, 0)] = 0
+                terrain.height_field_raw[local_x:step_end, min(center_y + alt_half_valid_width, terrain.length):] = 0
+                append_goal([local_x + step_len // 2, center_y])
+                local_x = step_end
+            cur_x = local_x
+
+        elif seg_type == "beam_gap":
+            beam1_len = sample_forward(beam_dis_x_min, beam_dis_x_max)
+            beam2_len = sample_forward(beam_dis_x_min, beam_dis_x_max)
+            seg_end = start_x + beam1_len + beam_gap_size_px + beam2_len
+            if seg_end > terrain.width - end_margin_px:
+                break
+
+            beam_width = max(int(np.ceil(np.random.uniform(beam_width_range[0], beam_width_range[1]) / terrain.horizontal_scale)), 1)
+            beam_half_width = beam_width // 2
+            beam_center = clip_center_y(
+                mid_y + np.random.randint(beam_y_offset_min, beam_y_offset_max + 1),
+                beam_half_width,
+            )
+            beam_start_y = beam_center - beam_half_width
+            beam_end_y = beam_start_y + beam_width
+
+            beam1_x0 = start_x
+            beam1_x1 = beam1_x0 + beam1_len
+            gap_x0 = beam1_x1
+            gap_x1 = gap_x0 + beam_gap_size_px
+            beam2_x0 = gap_x1
+            beam2_x1 = beam2_x0 + beam2_len
+
+            terrain.height_field_raw[start_x:beam2_x1, :] = gap_depth
+            terrain.height_field_raw[beam1_x0:beam1_x1, beam_start_y:beam_end_y] = platform_height_px
+            terrain.height_field_raw[beam2_x0:beam2_x1, beam_start_y:beam_end_y] = platform_height_px
+
+            append_goal([beam1_x0, beam_center])
+            append_goal([beam1_x1 - 1, beam_center])
+            append_goal([beam2_x0, beam_center])
+            append_goal([beam2_x1 - 1, beam_center])
+            cur_x = beam2_x1
+
+        elif seg_type == "biased_gap":
+            platform_lengths = [sample_forward(biased_dis_x_min, biased_dis_x_max), sample_forward(biased_dis_x_min, biased_dis_x_max)]
+            seg_end = start_x + platform_lengths[0] + biased_gap_size_px + platform_lengths[1]
+            if seg_end > terrain.width - end_margin_px:
+                break
+
+            centers_y = [
+                clip_center_y(mid_y + biased_lateral_offset, biased_corridor_half_width),
+                clip_center_y(mid_y - biased_lateral_offset, biased_corridor_half_width),
+            ]
+
+            local_x = start_x
+            for plat_idx, (plat_len, center_y) in enumerate(zip(platform_lengths, centers_y)):
+                plat_end = local_x + plat_len
+                terrain.height_field_raw[local_x:plat_end, :max(center_y - biased_corridor_half_width, 0)] = gap_depth
+                terrain.height_field_raw[local_x:plat_end, min(center_y + biased_corridor_half_width, terrain.length):] = gap_depth
+                append_goal([local_x + plat_len // 2, center_y])
+                local_x = plat_end
+                if plat_idx == 0:
+                    gap_end = local_x + biased_gap_size_px
+                    terrain.height_field_raw[local_x:gap_end, :] = gap_depth
+                    local_x = gap_end
+            cur_x = local_x
+
+        elif seg_type == "narrow_gap":
+            corridor_half_width_m = np.random.uniform(*narrow_corridor_half_width_range)
+            corridor_width = max(int(np.ceil(corridor_half_width_m * 2 / terrain.horizontal_scale)), 1)
+            corridor_half_width = corridor_width // 2
+            pit_half_size = max(round(0.45 / terrain.horizontal_scale), corridor_half_width * 3)
+
+            delta1 = sample_forward(narrow_dis_x_min, narrow_dis_x_max)
+            delta2 = sample_forward(narrow_dis_x_min, narrow_dis_x_max)
+            delta3 = sample_forward(narrow_dis_x_min, narrow_dis_x_max)
+            room1_x = start_x + delta1
+            room2_x = room1_x + delta2
+            final_room_x = room2_x + delta3
+            seg_end = final_room_x + pit_half_size + 1
+            if seg_end > terrain.width - end_margin_px:
+                break
+
+            terrain.height_field_raw[start_x:seg_end, :] = narrow_wall_height
+            room1_y = clip_center_y(mid_y + narrow_lateral_offset, pit_half_size)
+            room2_y = clip_center_y(mid_y - narrow_lateral_offset, pit_half_size)
+
+            carve_diagonal_corridor(start_x, mid_y, room1_x, room1_y, corridor_width, corridor_half_width, start_x, seg_end)
+            carve_square(room1_x, room1_y, pit_half_size, corridor_width, corridor_half_width, start_x, seg_end)
+            append_goal([room1_x, room1_y])
+
+            carve_diagonal_corridor(room1_x, room1_y, room2_x, room2_y, corridor_width, corridor_half_width, start_x, seg_end)
+            carve_square(room2_x, room2_y, pit_half_size, corridor_width, corridor_half_width, start_x, seg_end)
+            append_goal([room2_x, room2_y])
+
+            carve_diagonal_corridor(room2_x, room2_y, final_room_x, mid_y, corridor_width, corridor_half_width, start_x, seg_end)
+            carve_square(final_room_x, mid_y, pit_half_size, corridor_width, corridor_half_width, start_x, seg_end)
+            append_goal([final_room_x, mid_y])
+            cur_x = seg_end
+
+        else:
+            delta1 = sample_forward(wall_dis_x_min, wall_dis_x_max)
+            delta2 = sample_forward(wall_dis_x_min, wall_dis_x_max)
+            delta3 = sample_forward(wall_dis_x_min, wall_dis_x_max)
+            center_y_1 = clip_center_y(mid_y + np.random.randint(wall_dis_y_min, wall_dis_y_max + 1), wall_half_valid_width)
+            center_y_2 = clip_center_y(mid_y + np.random.randint(wall_dis_y_min, wall_dis_y_max + 1), wall_half_valid_width)
+
+            hurdle_specs = []
+            dis_x = start_x
+            for delta_x, center_y in ((delta1, center_y_1), (delta2, center_y_2)):
+                dis_x += delta_x
+                hurdle_depth = max(round(np.random.uniform(hurdle_depth_range[0], hurdle_depth_range[1]) / terrain.horizontal_scale), 2)
+                hurdle_height = round(np.random.uniform(hurdle_height_range[0], hurdle_height_range[1]) / terrain.vertical_scale)
+                obs_x0 = max(dis_x - hurdle_depth // 2, start_x)
+                obs_x1 = min(dis_x + hurdle_depth // 2, terrain.width - end_margin_px)
+                platform_x1 = min(obs_x1 + top_platform_depth_px, terrain.width - end_margin_px)
+                hurdle_specs.append((obs_x0, obs_x1, platform_x1, hurdle_height, center_y))
+                dis_x = platform_x1
+
+            final_x = dis_x + delta3
+            if final_x > terrain.width - end_margin_px:
+                break
+
+            for obs_x0, obs_x1, platform_x1, hurdle_height, center_y in hurdle_specs:
+                if obs_x1 > obs_x0:
+                    heights = np.linspace(0, hurdle_height, max(obs_x1 - obs_x0, 1)).astype(np.int16)
+                    terrain.height_field_raw[obs_x0:obs_x1, :] = heights[:, None]
+                    terrain.height_field_raw[obs_x0:obs_x1, :max(center_y - wall_half_valid_width, 0)] = 0
+                    terrain.height_field_raw[obs_x0:obs_x1, min(center_y + wall_half_valid_width, terrain.length):] = 0
+                if platform_x1 > obs_x1:
+                    terrain.height_field_raw[obs_x1:platform_x1, :] = hurdle_height
+                    terrain.height_field_raw[obs_x1:platform_x1, :max(center_y - wall_half_valid_width, 0)] = 0
+                    terrain.height_field_raw[obs_x1:platform_x1, min(center_y + wall_half_valid_width, terrain.length):] = 0
+                append_goal([(obs_x1 + platform_x1) // 2, center_y])
+
+            append_goal([final_x, mid_y])
+            cur_x = final_x
+
+        add_flat_transition()
+        segments_built += 1
+
+    final_x = min(max(cur_x, platform_len_px), terrain.width - end_margin_px)
+    append_goal([final_x, mid_y])
+
+    goals = np.array(goals)
+    if len(goals) < num_goals:
+        goals = np.concatenate([goals, np.repeat(goals[-1][None, :], num_goals - len(goals), axis=0)], axis=0)
+    elif len(goals) > num_goals:
+        goals = goals[:num_goals]
+    goals = _sanitize_goals_on_safe_cells(terrain, goals, gap_depth)
+
+    terrain.goals = goals * terrain.horizontal_scale
+
+    pad_width = int(pad_width / terrain.horizontal_scale)
+    pad_height = int(pad_height / terrain.vertical_scale)
+    terrain.height_field_raw[:, :pad_width] = np.maximum(terrain.height_field_raw[:, :pad_width], pad_height)
+    terrain.height_field_raw[:, -pad_width:] = np.maximum(terrain.height_field_raw[:, -pad_width:], pad_height)
+    terrain.height_field_raw[:pad_width, :] = np.maximum(terrain.height_field_raw[:pad_width, :], pad_height)
+    terrain.height_field_raw[-pad_width:, :] = np.maximum(terrain.height_field_raw[-pad_width:, :], pad_height)
 
 
 # end of new terrain
