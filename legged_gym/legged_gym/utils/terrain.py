@@ -1774,7 +1774,7 @@ def parkour_v2_terrain(
         if remaining_len <= 0:
             return
         transition_len = min(
-            max(round(np.random.uniform(segment_x_range[0], segment_x_range[1]) * 0.2 / terrain.horizontal_scale), 1),
+            max(round(np.random.uniform(segment_x_range[0], segment_x_range[1]) * 0.9 / terrain.horizontal_scale), 1),
             remaining_len,
         )
         terrain.height_field_raw[cur_x:cur_x + transition_len, :] = platform_height_px
