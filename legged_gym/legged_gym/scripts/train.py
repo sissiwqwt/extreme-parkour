@@ -46,9 +46,8 @@ for path in (
 import isaacgym
 from legged_gym.envs import *
 from legged_gym.utils import get_args, task_registry
-from shutil import copyfile
-import torch
 import wandb
+from evaluation import evaluate_training_checkpoint
 
 def _active_terrain_dict(terrain_dict):
     return {name: float(weight) for name, weight in terrain_dict.items() if float(weight) > 0.0}
@@ -75,6 +74,36 @@ def _print_terrain_run_summary(summary):
     print("  num_rows:", summary["num_rows"], "num_cols:", summary["num_cols"])
     print("  max_init_terrain_level:", summary["max_init_terrain_level"])
     print("  difficulty formula:", summary["difficulty_formula"])
+
+
+class PeriodicEvalCallback:
+    def __init__(self, args, log_dir, active_terrain_names, policy_type):
+        self.args = args
+        self.log_dir = log_dir
+        self.active_terrain_names = list(active_terrain_names)
+        self.policy_type = policy_type
+        self.eval_int = int(getattr(args, "eval_int", 0) or 0)
+
+    def should_run(self, completed_iteration):
+        return self.eval_int > 0 and completed_iteration > 0 and completed_iteration % self.eval_int == 0
+
+    def run(self, checkpoint_path, completed_iteration, checkpoint_iteration):
+        print(
+            f"Running periodic evaluation at training iteration {completed_iteration} "
+            f"using {checkpoint_path}"
+        )
+        summary = evaluate_training_checkpoint(
+            args=self.args,
+            eval_int=self.eval_int,
+            checkpoint_path=checkpoint_path,
+            training_iteration=completed_iteration,
+            checkpoint_iteration=checkpoint_iteration,
+
+            output_dir=self.log_dir,
+            active_terrain_names=self.active_terrain_names,
+            policy_type=self.policy_type,
+        )
+        print(json.dumps(summary["metrics"], indent=2))
 
 def train(args):
     args.headless = True
@@ -104,6 +133,15 @@ def train(args):
         json.dump(terrain_summary, f, indent=2, sort_keys=True)
     wandb.config.update(terrain_summary, allow_val_change=True)
     ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
+    if args.eval_int > 0:
+        policy_type = "depth" if ppo_runner.if_depth else "base"
+        eval_callback = PeriodicEvalCallback(
+            args=args,
+            log_dir=log_pth,
+            active_terrain_names=terrain_summary["active_terrains"].keys(),
+            policy_type=policy_type,
+        )
+        ppo_runner.set_eval_callback(eval_callback)
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 
 if __name__ == '__main__':

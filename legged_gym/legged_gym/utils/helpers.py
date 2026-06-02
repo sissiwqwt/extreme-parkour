@@ -236,7 +236,8 @@ def get_args():
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
         {"name": "--curriculum", "type": parse_bool, "default": None, "help": "Enable or disable terrain curriculum. Example: --curriculum False"},
-        {"name": "--task_targeted_curriculum", "type": parse_bool, "default": None, "help": "Enable or disable task-targeted curriculum. Example: --task_targeted_curriculum False"}
+        {"name": "--task_targeted_curriculum", "type": parse_bool, "default": None, "help": "Enable or disable task-targeted curriculum. Example: --task_targeted_curriculum False"},
+        {"name": "--eval_int", "type": int, "default": 0, "help": "Run evaluation every N training iterations. 0 disables periodic evaluation."}
 
 
     ]
