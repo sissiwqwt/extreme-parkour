@@ -745,13 +745,12 @@ def evaluate_training_checkpoint(
     eval_int,
     checkpoint_path,
     training_iteration,
-    checkpoint_iteration,
     output_dir,
     active_terrain_names,
     policy_type,
 ):
     eval_args = copy.deepcopy(args)
-    eval_args.checkpoint = checkpoint_iteration
+    eval_args.checkpoint = training_iteration
     eval_cfg = argparse.Namespace(
         policy_id=args.exptid,
         eval_episodes=256,
@@ -769,13 +768,13 @@ def evaluate_training_checkpoint(
         max_difficulty=True,
         policy_type=policy_type,
         checkpoint_path=checkpoint_path,
-        checkpoint_label=checkpoint_iteration,
+        checkpoint_label=training_iteration,
         episode_csv_path=None,
         summary_json_path=None,
     )
     summary = evaluate(eval_args, eval_cfg)
     summary["training_iteration"] = int(training_iteration)
-    summary["checkpoint"] = str(checkpoint_iteration)
+    summary["checkpoint"] = str(training_iteration)
     summary["eval_interval"] = int(eval_int)
     eval_json_path = os.path.join(output_dir, "eval.json")
     eval_csv_path = os.path.join(output_dir, "eval.csv")

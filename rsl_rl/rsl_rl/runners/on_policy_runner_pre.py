@@ -116,41 +116,6 @@ class OnPolicyRunner:
         self.tot_timesteps = 0
         self.tot_time = 0
         self.current_learning_iteration = 0
-        self.eval_callback = None
-
-    def set_eval_callback(self, callback):
-        self.eval_callback = callback
-
-    def _iteration_checkpoint_due(self, it):
-        if self.log_dir is None:
-            return False
-        if not self.if_depth:
-            if it < 2500:
-                return it % self.save_interval == 0
-            if it < 5000:
-                return it % (2 * self.save_interval) == 0
-            return it % (5 * self.save_interval) == 0
-        rel_it = it - self.start_learning_iteration
-        return (
-            (rel_it < 2500 and it % self.save_interval == 0)
-            or (rel_it < 5000 and it % (2 * self.save_interval) == 0)
-            or (rel_it >= 5000 and it % (5 * self.save_interval) == 0)
-        )
-
-    def _save_and_eval(self, it, completed_iteration=None, allow_eval=True):
-        if self.log_dir is None:
-            return
-        if completed_iteration is None:
-            completed_iteration = it
-        checkpoint_path = os.path.join(self.log_dir, 'model_{}.pt'.format(it))
-        saved = False
-        if self._iteration_checkpoint_due(it):
-            self.save(checkpoint_path)
-            saved = True
-        if allow_eval and self.eval_callback is not None and self.eval_callback.should_run(completed_iteration):
-            if not saved:
-                self.save(checkpoint_path)
-            self.eval_callback.run(checkpoint_path, completed_iteration, it)
         
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
@@ -240,24 +205,20 @@ class OnPolicyRunner:
             learn_time = stop - start
             if self.log_dir is not None:
                 self.log(locals())
-            completed_iteration = it + 1
-            self._save_and_eval(
-                it,
-                completed_iteration=completed_iteration,
-                allow_eval=completed_iteration < tot_iter,
-            )
+            if self.log_dir is not None and it < 2500:
+                if it % self.save_interval == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            elif self.log_dir is not None and it < 5000:
+                if it % (2*self.save_interval) == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            elif self.log_dir is not None:
+                if it % (5*self.save_interval) == 0:
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
         self.current_learning_iteration = tot_iter
         if self.log_dir is not None:
-            final_checkpoint = os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration))
-            self.save(final_checkpoint)
-            if self.eval_callback is not None and self.eval_callback.should_run(self.current_learning_iteration):
-                self.eval_callback.run(
-                    final_checkpoint,
-                    self.current_learning_iteration,
-                    self.current_learning_iteration,
-                )
+            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
 
     def learn_vision(self, num_learning_iterations, init_at_random_ep_len=False):
         tot_iter = self.current_learning_iteration + num_learning_iterations
@@ -358,25 +319,14 @@ class OnPolicyRunner:
 
             if self.log_dir is not None:
                 self.log_vision(locals())
-            completed_iteration = it + 1 - self.start_learning_iteration
-            self._save_and_eval(
-                it,
-                completed_iteration=completed_iteration,
-                allow_eval=completed_iteration < num_learning_iterations,
-            )
+            if (it-self.start_learning_iteration < 2500 and it % self.save_interval == 0) or \
+               (it-self.start_learning_iteration < 5000 and it % (2*self.save_interval) == 0) or \
+               (it-self.start_learning_iteration >= 5000 and it % (5*self.save_interval) == 0):
+                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         self.current_learning_iteration = tot_iter
         if self.log_dir is not None:
-            final_checkpoint = os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration))
-            self.save(final_checkpoint)
-            if self.eval_callback is not None and self.eval_callback.should_run(
-                self.current_learning_iteration - self.start_learning_iteration
-            ):
-                self.eval_callback.run(
-                    final_checkpoint,
-                    self.current_learning_iteration - self.start_learning_iteration,
-                    self.current_learning_iteration,
-                )
+            self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(self.current_learning_iteration)))
     
     def log_vision(self, locs, width=80, pad=35):
         self.tot_timesteps += self.num_steps_per_env * self.env.num_envs
