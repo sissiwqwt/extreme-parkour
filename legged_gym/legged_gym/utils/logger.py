@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
+#跑时数据采集 + 可视化 + 简单 reward 打印”
 import matplotlib.pyplot as plt
 import numpy as np
 from collections import defaultdict

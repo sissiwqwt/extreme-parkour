@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
+#是整个项目运行、训练、测试时的“工具箱”，负责参数解析、配置更新、随机种子、模型保存等基础功能。
 import os
 import copy
 import torch

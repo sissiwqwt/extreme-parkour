@@ -151,10 +151,10 @@ class LeggedRobotCfg(BaseConfig):
         downsampled_scale = 0.075
         curriculum = True
         task_targeted_curriculum = True
-        task_curriculum_window = 200
-        task_curriculum_min_samples = 50
-        task_curriculum_up_threshold = 0.75
-        task_curriculum_down_threshold = 0.35
+        task_curriculum_window = 400
+        task_curriculum_min_samples = 100
+        task_curriculum_up_threshold = 0.9
+        task_curriculum_down_threshold = 0.5
 
         all_vertical = False
         no_flat = True

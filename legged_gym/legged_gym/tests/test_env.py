@@ -27,7 +27,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
-
+#一个简单的环境连通性/运行测试，用于确认环境初始化和仿真循环没有崩溃
 import numpy as np
 import os
 from datetime import datetime

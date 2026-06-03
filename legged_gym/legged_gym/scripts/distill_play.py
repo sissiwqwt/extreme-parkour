@@ -50,6 +50,34 @@ sim_params.physx.num_threads = 4
 
 DEFAULT_DISTILL_TERRAIN = "parkour_v2"
 DEFAULT_TERRAIN_DIFFICULTY = 1.0
+DEFAULT_DISTILL_TERRAIN_ENVS = {
+    "smooth slope": 0, 
+    "rough slope up": 0,
+    "rough slope down": 0,
+    "rough stairs up": 0, 
+    "rough stairs down": 0, 
+    "discrete": 0, 
+    "stepping stones": 0,
+    "gaps": 0, 
+    "smooth flat": 0,
+    "pit": 0,
+    "wall": 0,
+    "platform": 0,
+    "large stairs up": 0,
+    "large stairs down": 0,
+    "parkour": 0,
+    "parkour_hurdle": 0,
+    "parkour_flat": 0,
+    "parkour_step": 0,
+    "parkour_gap": 0,
+    "alternating_step": 2,
+    "beam_gap": 2,
+    "asymmetric_gap": 2,
+    "parkour_v2": 2,
+    "narrow_gap": 2,
+    "climbing_wall": 2,
+    "demo": 0,
+}
 
 
 def _pop_script_argv():
@@ -59,7 +87,7 @@ def _pop_script_argv():
         "--video_out",
         type=str,
         default=None,
-        help="Output video file path (.mp4 recommended). Default: legged_gym/demos/<terrain>_distill_<ckpt>.mp4.",
+        help="Output directory for mp4 files. Default: legged_gym/demos.",
     )
     p.add_argument(
         "--video_fps",
@@ -72,12 +100,6 @@ def _pop_script_argv():
         type=int,
         default=None,
         help="Which parallel env index to record. Default: record all parallel envs.",
-    )
-    p.add_argument(
-        "--terrain_name",
-        type=str,
-        default=DEFAULT_DISTILL_TERRAIN,
-        help=f"Single terrain name to play. Default: {DEFAULT_DISTILL_TERRAIN}.",
     )
     p.add_argument(
         "--record_camera",
@@ -123,17 +145,10 @@ def _pop_script_argv():
         default=540,
         help="Third-person camera height (body mode uses depth sensor size).",
     )
-    difficulty_group = p.add_mutually_exclusive_group()
-    difficulty_group.add_argument(
-        "--terrain_level",
-        type=int,
-        default=None,
-        help="Fixed terrain row to play on. With the default 5 rows, valid values are 0..4.",
-    )
-    difficulty_group.add_argument(
+    p.add_argument(
         "--terrain_difficulty",
         type=float,
-        default=None,
+        default=DEFAULT_TERRAIN_DIFFICULTY,
         help="Fixed normalized terrain difficulty in [0, 1]. Applied exactly to generated terrains.",
     )
     p.add_argument(
@@ -142,11 +157,6 @@ def _pop_script_argv():
         help="Enable GPU simulation and RL. Default: False (CPU only, safer).",
     )
     ns, rest = p.parse_known_args()
-    ns.terrain_name = ns.terrain_name.strip()
-    if not ns.terrain_name:
-        raise ValueError("--terrain_name must not be empty")
-    if ns.terrain_level is None and ns.terrain_difficulty is None:
-        ns.terrain_difficulty = DEFAULT_TERRAIN_DIFFICULTY
     sys.argv = [sys.argv[0]] + rest
     return ns
 
@@ -178,41 +188,52 @@ def _checkpoint_from_model_name(model, fallback):
     return "latest"
 
 
-def _active_terrain_name(terrain_dict):
-    active = [(name, weight) for name, weight in terrain_dict.items() if weight > 0]
-    if not active:
-        return "terrain"
-    if len(active) > 1:
-        return "all_terrains"
-    return max(active, key=lambda item: item[1])[0]
-
-
 def _safe_filename_part(value):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "terrain"
 
 
-def _default_video_path(env_cfg, checkpoint):
-    terrain = _safe_filename_part(_active_terrain_name(env_cfg.terrain.terrain_dict))
+def _default_video_dir():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     demos_dir = os.path.abspath(os.path.join(script_dir, "..", "demos"))
-    return os.path.join(demos_dir, f"{terrain}_distill_{checkpoint}.mp4")
+    return demos_dir
 
 
-def _distill_terrain_dict(terrain_name):
-    return {terrain_name: 1.0}
+def _format_difficulty_value(value):
+    return f"{float(value):.3f}".rstrip("0").rstrip(".")
 
 
-def _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty):
-    env_cfg.terrain.terrain_dict = dict(terrain_dict)
+def _distill_terrain_counts():
+    terrain_counts = {}
+    for terrain_name, env_count in DEFAULT_DISTILL_TERRAIN_ENVS.items():
+        terrain_name = str(terrain_name).strip()
+        if not terrain_name:
+            raise ValueError("Terrain names in DEFAULT_DISTILL_TERRAIN_ENVS must not be empty")
+        env_count = int(env_count)
+        if env_count <= 0:
+            continue
+        terrain_counts[terrain_name] = env_count
+    if not terrain_counts:
+        raise ValueError("DEFAULT_DISTILL_TERRAIN_ENVS must contain at least one positive env count")
+    return terrain_counts
+
+
+def _generation_terrain_dict(terrain_counts):
+    return {terrain_name: 1.0 for terrain_name in terrain_counts.keys()}
+
+
+def _terrain_names_by_env(terrain_counts):
+    terrain_names = []
+    for terrain_name, env_count in terrain_counts.items():
+        terrain_names.extend([terrain_name] * int(env_count))
+    return terrain_names
+
+
+def _apply_distill_terrain_config(env_cfg, terrain_counts, terrain_difficulty):
+    env_cfg.terrain.terrain_dict = _generation_terrain_dict(terrain_counts)
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
-    env_cfg.terrain.num_cols = 1
-    if terrain_difficulty is not None:
-        env_cfg.terrain.num_rows = 1
-        env_cfg.terrain.fixed_difficulty = float(terrain_difficulty)
-    else:
-        if hasattr(env_cfg.terrain, "fixed_difficulty"):
-            delattr(env_cfg.terrain, "fixed_difficulty")
-        env_cfg.terrain.num_rows = 5
+    env_cfg.terrain.num_cols = len(env_cfg.terrain.terrain_dict)
+    env_cfg.terrain.num_rows = 1
+    env_cfg.terrain.fixed_difficulty = float(terrain_difficulty)
 
 
 def _patch_fixed_terrain_difficulty():
@@ -239,10 +260,10 @@ def _patch_fixed_terrain_difficulty():
     Terrain.curiculum = curiculum_with_fixed_difficulty
 
 
-def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict, terrain_difficulty):
+def _make_env_with_terrain_override(name, args, env_cfg, terrain_counts, terrain_difficulty):
     task_class = task_registry.get_task_class(name)
     env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
-    _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty)
+    _apply_distill_terrain_config(env_cfg, terrain_counts, terrain_difficulty)
     set_seed(env_cfg.seed)
 
     sim_params = {"sim": class_to_dict(env_cfg.sim)}
@@ -257,17 +278,6 @@ def _make_env_with_terrain_override(name, args, env_cfg, terrain_dict, terrain_d
     return env, env_cfg
 
 
-def _requested_terrain_level(rec_cfg, num_rows):
-    if rec_cfg.terrain_level is not None:
-        if rec_cfg.terrain_level < 0 or rec_cfg.terrain_level >= num_rows:
-            raise ValueError(
-                f"--terrain_level must be in [0, {num_rows - 1}], got {rec_cfg.terrain_level}"
-            )
-        return rec_cfg.terrain_level
-
-    return None
-
-
 def _requested_terrain_difficulty(rec_cfg):
     if rec_cfg.terrain_difficulty is None:
         return None
@@ -278,15 +288,38 @@ def _requested_terrain_difficulty(rec_cfg):
     return rec_cfg.terrain_difficulty
 
 
-def _apply_fixed_terrain_level(env, terrain_level):
-    if terrain_level is None:
-        return
+def _refresh_env_terrain_state(env):
+    env.env_origins[:] = env.terrain_origins[env.terrain_levels, env.terrain_types]
+    env.env_class[:] = env.terrain_class[env.terrain_levels, env.terrain_types]
+    temp = env.terrain_goals[env.terrain_levels, env.terrain_types]
+    last_col = temp[:, -1].unsqueeze(1)
+    env.env_goals[:] = torch.cat(
+        (temp, last_col.repeat(1, env.cfg.env.num_future_goal_obs, 1)),
+        dim=1,
+    )
+    env.cur_goals = env._gather_cur_goals()
+    env.next_goals = env._gather_cur_goals(future=1)
 
+
+def _assign_env_terrains(env, terrain_counts):
     env.cfg.terrain.curriculum = False
-    env.terrain_levels[:] = int(terrain_level)
-    env._refresh_terrain_state()
+    terrain_names = list(terrain_counts.keys())
+    terrain_name_to_col = {terrain_name: col for col, terrain_name in enumerate(terrain_names)}
+    assigned_names = _terrain_names_by_env(terrain_counts)
+    if len(assigned_names) != env.num_envs:
+        raise ValueError(
+            f"Requested {len(assigned_names)} envs from terrain counts but env has {env.num_envs}"
+        )
+    env.terrain_levels[:] = 0
+    env.terrain_types[:] = torch.tensor(
+        [terrain_name_to_col[name] for name in assigned_names],
+        dtype=torch.long,
+        device=env.device,
+    )
+    _refresh_env_terrain_state(env)
     env_ids = torch.arange(env.num_envs, device=env.device)
     env.reset_idx(env_ids)
+    return assigned_names
 
 
 def _record_env_ids(rec_cfg, num_envs):
@@ -299,11 +332,19 @@ def _record_env_ids(rec_cfg, num_envs):
     return [rec_cfg.record_env]
 
 
-def _video_path_for_env(video_path, env_id, record_all):
-    if not record_all:
-        return video_path
-    root, ext = os.path.splitext(video_path)
-    return f"{root}_env{env_id}{ext or '.mp4'}"
+def _video_path_for_env(output_dir, terrain_name, terrain_difficulty, env_id):
+    terrain = _safe_filename_part(terrain_name)
+    difficulty = _safe_filename_part(_format_difficulty_value(terrain_difficulty))
+    return os.path.join(output_dir, f"{terrain}_{difficulty}_{env_id}.mp4")
+
+
+def _output_dir(video_out):
+    if video_out is None:
+        return _default_video_dir()
+    if video_out.lower().endswith(".mp4"):
+        parent_dir = os.path.dirname(video_out)
+        return parent_dir or "."
+    return video_out
 
 
 def _rgba_to_bgr(rgba):
@@ -418,29 +459,15 @@ def play_headless_record(args, rec_cfg):
         env_cfg.domain_rand.action_delay_view = 0
     env_cfg.env.episode_length_s = 60
     env_cfg.commands.resampling_time = 60
-    env_cfg.terrain.num_rows = 5
     env_cfg.terrain.height = [0.02, 0.02]
-    terrain_dict = _distill_terrain_dict(rec_cfg.terrain_name)
+    terrain_counts = _distill_terrain_counts()
     terrain_difficulty = _requested_terrain_difficulty(rec_cfg)
-    _apply_distill_terrain_config(env_cfg, terrain_dict, terrain_difficulty)
-
-    min_num_envs = 1 if rec_cfg.record_env is None else rec_cfg.record_env + 1
-    args.num_envs = (
-        min_num_envs if args.num_envs is None else max(args.num_envs, min_num_envs)
-    )
+    requested_num_envs = sum(terrain_counts.values())
+    args.num_envs = requested_num_envs
     env_cfg.env.num_envs = args.num_envs
 
-    terrain_level = _requested_terrain_level(rec_cfg, env_cfg.terrain.num_rows)
-    if terrain_difficulty is not None:
-        env_cfg.terrain.curriculum = False
-        env_cfg.terrain.max_difficulty = False
-    elif terrain_level is None:
-        env_cfg.terrain.curriculum = False
-        env_cfg.terrain.max_difficulty = True
-    else:
-        env_cfg.terrain.curriculum = True
-        env_cfg.terrain.task_targeted_curriculum = False
-        env_cfg.terrain.max_init_terrain_level = terrain_level
+    env_cfg.terrain.curriculum = False
+    env_cfg.terrain.max_difficulty = False
 
     env_cfg.depth.angle = [0, 1]
     env_cfg.noise.add_noise = True
@@ -471,10 +498,10 @@ def play_headless_record(args, rec_cfg):
         name=args.task,
         args=args,
         env_cfg=env_cfg,
-        terrain_dict=terrain_dict,
+        terrain_counts=terrain_counts,
         terrain_difficulty=terrain_difficulty,
     )
-    _apply_fixed_terrain_level(env, terrain_level)
+    terrain_names_by_env = _assign_env_terrains(env, terrain_counts)
     obs = env.get_observations()
 
     if not env.cfg.depth.use_camera or not env.cam_handles:
@@ -483,7 +510,6 @@ def play_headless_record(args, rec_cfg):
         )
 
     record_env_ids = _record_env_ids(rec_cfg, env.num_envs)
-    record_all = rec_cfg.record_env is None
 
     third_person_handles = {}
     third_smoothing = {}
@@ -537,10 +563,8 @@ def play_headless_record(args, rec_cfg):
 
     import cv2
 
-    video_path = rec_cfg.video_out
-    if video_path is None:
-        video_path = _default_video_path(env_cfg, checkpoint)
-    os.makedirs(os.path.dirname(video_path) or ".", exist_ok=True)
+    output_dir = _output_dir(rec_cfg.video_out)
+    os.makedirs(output_dir, exist_ok=True)
 
     fps = (
         rec_cfg.video_fps
@@ -566,7 +590,12 @@ def play_headless_record(args, rec_cfg):
     first_frames = {}
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     for env_id in record_env_ids:
-        env_video_path = _video_path_for_env(video_path, env_id, record_all)
+        env_video_path = _video_path_for_env(
+            output_dir,
+            terrain_names_by_env[env_id],
+            terrain_difficulty,
+            env_id,
+        )
         first = _record_frame(env_id)
         h, w = first.shape[:2]
         writer = cv2.VideoWriter(env_video_path, fourcc, fps, (w, h))
@@ -588,18 +617,10 @@ def play_headless_record(args, rec_cfg):
     for env_id in record_env_ids:
         w, h = first_frames[env_id]
         print(f"  env {env_id} → {video_paths[env_id]} ({w}x{h})")
-    print(
-        f"Running terrain '{rec_cfg.terrain_name}' across "
-        f"{env_cfg.terrain.num_cols} column and {env.num_envs} envs."
-    )
-    if terrain_difficulty is not None:
-        print(f"Using fixed terrain difficulty {terrain_difficulty:.2f}.")
-    if terrain_level is not None:
-        terrain_difficulty = terrain_level / max(env_cfg.terrain.num_rows - 1, 1)
-        print(
-            f"Using fixed terrain level {terrain_level}/{env_cfg.terrain.num_rows - 1} "
-            f"(difficulty {terrain_difficulty:.2f})."
-        )
+    print(f"Using fixed terrain difficulty {terrain_difficulty:.2f}.")
+    print(f"Running {env.num_envs} envs across {len(terrain_counts)} terrain types.")
+    for terrain_name, env_count in terrain_counts.items():
+        print(f"  {terrain_name}: {env_count} envs")
 
     try:
         for _ in range(int(env.max_episode_length)):
