@@ -129,11 +129,15 @@ class PPO:
             self.enable_heading_model = depth_encoder_paras.get("enable_heading_model", False)
             self.heading_loss_weight = depth_encoder_paras.get("heading_loss_weight", 1.0)
             self.action_loss_weight = depth_encoder_paras.get("action_loss_weight", 1.0)
-            self.freeze_backbone_during_action_distillation = depth_encoder_paras.get("freeze_backbone_during_action_distillation", True)
+            self.latent_loss_weight = depth_encoder_paras.get("latent_loss_weight", 1.0)
+            self.freeze_backbone_during_action_distillation = depth_encoder_paras.get("freeze_backbone_during_action_distillation", False)
             self.depth_actor = depth_actor
             if self.enable_heading_model:
                 self.depth_encoder_optimizer = optim.Adam(
-                    self.depth_encoder.heading_parameters(include_backbone=True),
+                    [
+                        *self.depth_encoder.heading_parameters(include_backbone=True),
+                        *self.depth_encoder.action_parameters(include_backbone=False),
+                    ],
                     lr=depth_encoder_paras["learning_rate"],
                 )
                 self.depth_actor_optimizer = optim.Adam(
@@ -341,15 +345,19 @@ class PPO:
             self.depth_encoder_optimizer.step()
             return depth_encoder_loss.item()
     
-    def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch):
+    def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch, depth_latent_batch=None, scandots_latent_batch=None):
         if self.if_depth:
             depth_actor_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1).mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
+            if depth_latent_batch is not None and scandots_latent_batch is not None:
+                latent_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
+            else:
+                latent_loss = torch.zeros((), device=self.device)
 
             if self.enable_heading_model:
-                loss = self.action_loss_weight * depth_actor_loss
+                loss = self.action_loss_weight * depth_actor_loss + self.latent_loss_weight * latent_loss
             else:
-                loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss
+                loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss + self.latent_loss_weight * latent_loss
 
             self.depth_actor_optimizer.zero_grad()
             loss.backward()
@@ -358,18 +366,22 @@ class PPO:
                 depth_actor_params.extend(param_group["params"])
             nn.utils.clip_grad_norm_(depth_actor_params, self.max_grad_norm)
             self.depth_actor_optimizer.step()
-            return depth_actor_loss.item(), yaw_loss.item()
+            return depth_actor_loss.item(), yaw_loss.item(), latent_loss.item()
 
-    def update_heading_predictor(self, yaw_student_batch, yaw_teacher_batch):
+    def update_heading_predictor(self, yaw_student_batch, yaw_teacher_batch, depth_latent_batch=None, scandots_latent_batch=None):
         if self.if_depth:
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
-            loss = self.heading_loss_weight * yaw_loss
+            if depth_latent_batch is not None and scandots_latent_batch is not None:
+                latent_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
+            else:
+                latent_loss = torch.zeros((), device=self.device)
+            loss = self.heading_loss_weight * yaw_loss + self.latent_loss_weight * latent_loss
 
             self.depth_encoder_optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(self.depth_encoder.parameters(), self.max_grad_norm)
             self.depth_encoder_optimizer.step()
-            return yaw_loss.item()
+            return yaw_loss.item(), latent_loss.item()
 
     def set_heading_pretrain_mode(self, heading_pretrain):
         if not self.if_depth:
@@ -383,7 +395,7 @@ class PPO:
 
         if heading_pretrain:
             self.depth_encoder.set_heading_trainable(True)
-            self.depth_encoder.set_action_trainable(False)
+            self.depth_encoder.set_action_trainable(True, include_backbone=False)
             for param in self.depth_actor.parameters():
                 param.requires_grad = False
         else:

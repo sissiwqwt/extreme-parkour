@@ -340,6 +340,7 @@ class OnPolicyRunner:
             delta_yaw_ok_percentage = sum(delta_yaw_ok_buffer) / len(delta_yaw_ok_buffer)
             scandots_latent_buffer = torch.cat(scandots_latent_buffer, dim=0)
             depth_latent_buffer = torch.cat(depth_latent_buffer, dim=0)
+            latent_loss = 0
             depth_encoder_loss = 0
             # depth_encoder_loss = self.alg.update_depth_encoder(depth_latent_buffer, scandots_latent_buffer)
 
@@ -348,11 +349,24 @@ class OnPolicyRunner:
             yaw_buffer_teacher = torch.cat(yaw_buffer_teacher, dim=0)
             if heading_pretrain:
                 depth_actor_loss = 0
-                yaw_loss = self.alg.update_heading_predictor(yaw_buffer_student, yaw_buffer_teacher)
+                yaw_loss, latent_loss = self.alg.update_heading_predictor(
+                    yaw_buffer_student,
+                    yaw_buffer_teacher,
+                    depth_latent_buffer,
+                    scandots_latent_buffer,
+                )
             else:
                 actions_student_buffer = torch.cat(actions_student_buffer, dim=0)
-                depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher)
+                depth_actor_loss, yaw_loss, latent_loss = self.alg.update_depth_actor(
+                    actions_student_buffer,
+                    actions_teacher_buffer,
+                    yaw_buffer_student,
+                    yaw_buffer_teacher,
+                    depth_latent_buffer,
+                    scandots_latent_buffer,
+                )
             heading_loss = yaw_loss
+            depth_encoder_loss = latent_loss
 
             # depth_encoder_loss, depth_actor_loss = self.alg.update_depth_both(depth_latent_buffer, scandots_latent_buffer, actions_student_buffer, actions_teacher_buffer)
             stop = time.time()
@@ -400,6 +414,7 @@ class OnPolicyRunner:
         wandb_dict['Loss_depth/depth_actor'] = locs['depth_actor_loss']
         wandb_dict['Loss_depth/yaw'] = locs['yaw_loss']
         wandb_dict['Loss_depth/heading'] = locs.get('heading_loss', locs['yaw_loss'])
+        wandb_dict['Loss_depth/latent'] = locs.get('latent_loss', locs['depth_encoder_loss'])
         wandb_dict['Loss_depth/heading_pretrain'] = float(locs.get('heading_pretrain', False))
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
