@@ -113,6 +113,42 @@ python train.py --exptid nontt --device cuda:0 --headless --task_targeted_curric
 
 ## 常用 CLI 覆盖
 
+示例：一次性启用所有 improved TTC 机制，并使用较激进参数。该配置会更快收缩 warmup、更早触发任务难度调整、更强地偏向低成功率任务，并更频繁地对滞后任务施加临时高难度采样；适合做快速压力测试或探索性训练，不建议直接作为稳定 baseline。
+
+```bash
+python train.py \
+  --exptid improved-ttc-all-aggressive \
+  --proj_name parkour_ttc \
+  --device cuda:0 \
+  --headless \
+  --curriculum True \
+  --task_targeted_curriculum True \
+  --task_curriculum_dynamic_window True \
+  --task_curriculum_window_start 40 \
+  --task_curriculum_window_end 180 \
+  --task_curriculum_window_warmup_iters 1200 \
+  --task_curriculum_dynamic_min_samples True \
+  --task_curriculum_min_samples_start 8 \
+  --task_curriculum_min_samples_end 32 \
+  --task_curriculum_min_samples_warmup_iters 1200 \
+  --task_curriculum_dynamic_thresholds True \
+  --task_curriculum_up_threshold_start 0.55 \
+  --task_curriculum_up_threshold_end 0.70 \
+  --task_curriculum_down_threshold_start 0.50 \
+  --task_curriculum_down_threshold_end 0.40 \
+  --task_curriculum_threshold_warmup_iters 1200 \
+  --task_curriculum_prioritized_sampling True \
+  --task_curriculum_pause_solved_tasks True \
+  --task_curriculum_pause_success_threshold 0.90 \
+  --task_curriculum_resume_success_threshold 0.82 \
+  --task_curriculum_min_sampling_weight 0.005 \
+  --task_curriculum_priority_alpha 2.0 \
+  --task_curriculum_lagged_level_noise True \
+  --task_curriculum_lag_success_gap 0.10 \
+  --task_curriculum_lag_level_noise_prob 0.90 \
+  --task_curriculum_lag_level_noise_levels 2
+```
+
 示例：更快 warmup, 更激进地关注困难任务。
 
 ```bash
