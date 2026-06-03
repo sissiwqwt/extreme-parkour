@@ -74,6 +74,64 @@ def _apply_checkpoint_heading_cfg(train_cfg, checkpoint_path, args):
         train_cfg.depth_encoder.heading_dim = 2
 
 
+def _resolve_teacher_checkpoint_path(args, train_cfg):
+    explicit_path = getattr(args, "teacher_checkpoint_path", None)
+    if explicit_path:
+        path = os.path.abspath(os.path.expanduser(explicit_path))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Teacher checkpoint file does not exist: {path}")
+        return path
+
+    teacher_run = getattr(args, "teacher", None)
+    if not teacher_run:
+        return None
+
+    teacher_proj_name = getattr(args, "teacher_proj_name", None) or args.proj_name
+    teacher_root = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", teacher_proj_name, teacher_run)
+    if not os.path.isdir(teacher_root):
+        raise FileNotFoundError(
+            "Teacher checkpoint directory does not exist: {}\n"
+            "Expected layout: legged_gym/logs/<teacher_proj_name>/<teacher_run>/model_<checkpoint>.pt".format(teacher_root)
+        )
+
+    checkpoint = getattr(args, "teacher_checkpoint", None)
+    if checkpoint is None:
+        checkpoint = train_cfg.runner.checkpoint
+    if checkpoint == -1:
+        models = [name for name in os.listdir(teacher_root) if name.startswith("model_") and name.endswith(".pt")]
+        if not models:
+            raise FileNotFoundError(f"No model_*.pt checkpoint found in teacher directory: {teacher_root}")
+        models.sort(key=lambda name: "{0:0>15}".format(name))
+        model_name = models[-1]
+    else:
+        model_name = f"model_{checkpoint}.pt"
+
+    path = os.path.join(teacher_root, model_name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "Teacher checkpoint file does not exist: {}\n"
+            "teacher_proj_name={}, teacher={}, teacher_checkpoint={}".format(
+                path,
+                teacher_proj_name,
+                teacher_run,
+                checkpoint,
+            )
+        )
+    return path
+
+
+def _validate_teacher_checkpoint(path):
+    try:
+        loaded_dict = torch.load(path, map_location="cpu")
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load teacher checkpoint for validation: {path}\n{exc}") from exc
+    if "model_state_dict" not in loaded_dict:
+        raise KeyError(
+            "Teacher checkpoint is missing 'model_state_dict': {}\n"
+            "Depth distillation needs a teacher/base actor_critic checkpoint.".format(path)
+        )
+
+
 class TaskRegistry():
     def __init__(self):
         self.task_classes = {}
@@ -178,12 +236,25 @@ class TaskRegistry():
         
         resume = train_cfg.runner.resume
         resume_path = None
-        if args.resumeid:
+        explicit_teacher_path = getattr(args, "teacher_checkpoint_path", None)
+        teacher_or_resume_id = args.teacher if getattr(args, "teacher", None) else args.resumeid
+        if getattr(args, "teacher", None) and args.resumeid and args.teacher != args.resumeid:
+            print(f"Both --teacher and --resumeid were provided; using --teacher={args.teacher} as the distillation source.")
+        if explicit_teacher_path or getattr(args, "teacher", None):
+            resume_path = _resolve_teacher_checkpoint_path(args, train_cfg)
+            _validate_teacher_checkpoint(resume_path)
+            log_root = os.path.dirname(resume_path)
+            resume = True
+        elif args.resumeid:
             log_root = LEGGED_GYM_ROOT_DIR + f"/logs/{args.proj_name}/" + args.resumeid
             resume = True
+
         if resume:
-            resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
+            if resume_path is None:
+                resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
             _apply_checkpoint_heading_cfg(train_cfg, resume_path, args)
+            if getattr(args, "use_camera", False):
+                print(f"Depth distillation teacher/source checkpoint: {resume_path}")
 
         train_cfg_dict = class_to_dict(train_cfg)
         runner = OnPolicyRunner(env, 

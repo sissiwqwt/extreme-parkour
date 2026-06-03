@@ -142,11 +142,11 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.terrain.max_error = env_cfg.terrain.max_error_camera
             env_cfg.terrain.horizontal_scale = env_cfg.terrain.horizontal_scale_camera
             env_cfg.terrain.simplify_grid = True
-            env_cfg.terrain.terrain_dict["parkour_hurdle"] = 0.2
+            env_cfg.terrain.terrain_dict["parkour_hurdle"] = 0.05
             env_cfg.terrain.terrain_dict["parkour_flat"] = 0.05
-            env_cfg.terrain.terrain_dict["parkour_gap"] = 0.2
-            env_cfg.terrain.terrain_dict["parkour_step"] = 0.2
-            env_cfg.terrain.terrain_dict["demo"] = 0.15
+            env_cfg.terrain.terrain_dict["parkour_gap"] = 0.1
+            env_cfg.terrain.terrain_dict["parkour_step"] = 0.1
+            env_cfg.terrain.terrain_dict["demo"] = 0.1
             env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
         if env_cfg.depth.use_camera:
             env_cfg.terrain.y_range = [-0.1, 0.1]
@@ -230,6 +230,9 @@ def get_args():
         {"name": "--proj_name", "type": str,  "default": "parkour_new", "help": "run folder name."},
         
         {"name": "--teacher", "type": str, "help": "Name of the teacher policy to use when distilling"},
+        {"name": "--teacher_proj_name", "type": str, "help": "Project/log folder that contains the teacher checkpoint. Defaults to --proj_name."},
+        {"name": "--teacher_checkpoint", "type": int, "help": "Teacher checkpoint number. If omitted, --checkpoint is used."},
+        {"name": "--teacher_checkpoint_path", "type": str, "help": "Explicit path to teacher checkpoint .pt file. Overrides --teacher/--teacher_proj_name/--teacher_checkpoint."},
         {"name": "--exptid", "type": str, "help": "exptid"},
         {"name": "--resumeid", "type": str, "help": "exptid"},
         {"name": "--daggerid", "type": str, "help": "name of dagger run"},

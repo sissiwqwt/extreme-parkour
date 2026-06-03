@@ -126,6 +126,48 @@ delta_yaw_ok = abs(delta_yaw_wrapped) < 0.6
 
 ## 推荐实验步骤
 
+## Teacher checkpoint 指定方式
+
+vision distillation 中的 teacher action 来自 `runner.alg.actor_critic.act_inference(...)`。这个 `actor_critic` 是从 checkpoint 的 `model_state_dict` 加载的。
+
+现在推荐显式使用：
+
+```text
+--teacher TEACHER_RUN_ID
+--teacher_proj_name TEACHER_PROJ_NAME
+--teacher_checkpoint TEACHER_CHECKPOINT
+```
+
+也可以直接指定 checkpoint 文件：
+
+```text
+--teacher_checkpoint_path /abs/or/relative/path/to/model_XXXXX.pt
+```
+
+显式路径优先级最高，会覆盖 `--teacher`、`--teacher_proj_name` 和 `--teacher_checkpoint`。
+
+checkpoint 查找路径为：
+
+```text
+legged_gym/logs/<TEACHER_PROJ_NAME>/<TEACHER_RUN_ID>/model_<TEACHER_CHECKPOINT>.pt
+```
+
+如果不传 `--teacher_proj_name`，默认使用 `--proj_name`。如果不传 `--teacher_checkpoint`，默认使用 `--checkpoint`。如果 checkpoint 为 `-1`，会加载 teacher run 目录下最后一个 `model_*.pt`。训练启动时会打印：
+
+```text
+Depth distillation teacher/source checkpoint: ...
+```
+
+必须确认这行指向的是 teacher/base policy，而不是当前失败的 student/distill run。`--resumeid` 仍可用于兼容旧命令；如果同时传入 `--teacher` 和 `--resumeid`，代码会优先使用 `--teacher`。
+
+如果指定了 `--teacher` 或 `--teacher_checkpoint_path`，代码会在训练前强制检查：
+
+- teacher checkpoint 文件必须存在；
+- teacher checkpoint 必须能被 `torch.load` 读取；
+- checkpoint 中必须包含 `model_state_dict`。
+
+任一条件不满足都会直接抛错退出训练，避免在没有 teacher 的情况下浪费 GPU 资源。
+
 ### 0. 先做语法检查
 
 ```bash
@@ -155,9 +197,9 @@ python legged_gym/legged_gym/scripts/train.py \
   --action_loss_weight 1.0 \
   --latent_loss_weight 1.0 \
   --freeze_backbone_during_action_distillation False \
-  --resume \
-  --resumeid TEACHER_OR_BASE_RUN_ID \
-  --checkpoint -1 \
+  --teacher TEACHER_RUN_ID \
+  --teacher_proj_name TEACHER_PROJ_NAME \
+  --teacher_checkpoint TEACHER_CHECKPOINT \
   --curriculum True \
   --task_targeted_curriculum False \
   --max_iterations 100
@@ -189,9 +231,31 @@ python legged_gym/legged_gym/scripts/train.py \
   --action_loss_weight 1.0 \
   --latent_loss_weight 1.0 \
   --freeze_backbone_during_action_distillation False \
-  --resume \
-  --resumeid TEACHER_OR_BASE_RUN_ID \
-  --checkpoint -1 \
+  --teacher TEACHER_RUN_ID \
+  --teacher_proj_name TEACHER_PROJ_NAME \
+  --teacher_checkpoint TEACHER_CHECKPOINT \
+  --curriculum True \
+  --task_targeted_curriculum False \
+  --max_iterations 9000
+```
+
+如果 teacher checkpoint 不在标准 logs 目录中，可以改用：
+
+```bash
+python legged_gym/legged_gym/scripts/train.py \
+  --task a1 \
+  --device cuda:0 \
+  --rl_device cuda:0 \
+  --proj_name parkour_heading \
+  --exptid heading_c_fix_pre2000_latent1_unfreeze \
+  --use_camera \
+  --enable_heading_model \
+  --heading_pretrain_iters 2000 \
+  --heading_loss_weight 1.0 \
+  --action_loss_weight 1.0 \
+  --latent_loss_weight 1.0 \
+  --freeze_backbone_during_action_distillation False \
+  --teacher_checkpoint_path /path/to/model_XXXXX.pt \
   --curriculum True \
   --task_targeted_curriculum False \
   --max_iterations 9000
@@ -215,9 +279,9 @@ python legged_gym/legged_gym/scripts/train.py \
   --action_loss_weight 1.0 \
   --latent_loss_weight 1.0 \
   --freeze_backbone_during_action_distillation True \
-  --resume \
-  --resumeid TEACHER_OR_BASE_RUN_ID \
-  --checkpoint -1 \
+  --teacher TEACHER_RUN_ID \
+  --teacher_proj_name TEACHER_PROJ_NAME \
+  --teacher_checkpoint TEACHER_CHECKPOINT \
   --curriculum True \
   --task_targeted_curriculum False \
   --max_iterations 9000
