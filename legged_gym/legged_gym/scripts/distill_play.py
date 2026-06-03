@@ -192,6 +192,23 @@ def _safe_filename_part(value):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_") or "terrain"
 
 
+def _split_depth_heading(depth_output, depth_encoder_cfg):
+    heading_dim = (
+        depth_encoder_cfg.get("heading_dim", 4)
+        if depth_encoder_cfg.get("enable_heading_model", False)
+        else 2
+    )
+    return depth_output[:, :-heading_dim], depth_output[:, -heading_dim:]
+
+
+def _heading_to_actor_yaw(heading_pred, depth_encoder_cfg):
+    if not depth_encoder_cfg.get("enable_heading_model", False):
+        return depth_encoder_cfg.get("heading_output_scale", 1.5) * heading_pred
+    delta_yaw = torch.atan2(heading_pred[:, 1], heading_pred[:, 0])
+    delta_next_yaw = torch.atan2(heading_pred[:, 3], heading_pred[:, 2])
+    return torch.stack((delta_yaw, delta_next_yaw), dim=-1)
+
+
 def _default_video_dir():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     demos_dir = os.path.abspath(os.path.join(script_dir, "..", "demos"))
@@ -658,23 +675,30 @@ def play_headless_record(args, rec_cfg):
                     if infos["depth"] is not None:
                         obs_student = obs[:, : env_cfg.env.n_proprio].clone()
                         obs_student[:, 6:8] = 0
-                        depth_latent_and_yaw = depth_encoder(
-                            infos["depth"], obs_student
+                        with torch.no_grad():
+                            depth_latent_and_heading = depth_encoder(
+                                infos["depth"], obs_student
+                            )
+                        depth_encoder_cfg = ppo_runner.alg.depth_encoder_paras
+                        depth_latent, heading_pred = _split_depth_heading(
+                            depth_latent_and_heading, depth_encoder_cfg
                         )
-                        depth_latent = depth_latent_and_yaw[:, :-2]
-                        yaw = depth_latent_and_yaw[:, -2:]
-                        obs[:, 6:8] = 1.5 * yaw
+                        obs[:, 6:8] = _heading_to_actor_yaw(
+                            heading_pred, depth_encoder_cfg
+                        )
                 else:
                     depth_latent = None
 
                 if hasattr(ppo_runner.alg, "depth_actor"):
-                    actions = ppo_runner.alg.depth_actor(
-                        obs.detach(), hist_encoding=True, scandots_latent=depth_latent
-                    )
+                    with torch.no_grad():
+                        actions = ppo_runner.alg.depth_actor(
+                            obs.detach(), hist_encoding=True, scandots_latent=depth_latent
+                        )
                 else:
-                    actions = policy(
-                        obs.detach(), hist_encoding=True, scandots_latent=depth_latent
-                    )
+                    with torch.no_grad():
+                        actions = policy(
+                            obs.detach(), hist_encoding=True, scandots_latent=depth_latent
+                        )
 
             obs, _, _, _, infos = env.step(actions.detach())
 

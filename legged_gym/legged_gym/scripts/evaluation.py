@@ -142,6 +142,7 @@ IMPLEMENTED_TERRAIN_NAMES = {
     "parkour_flat",
     "parkour_step",
     "parkour_gap",
+    "bean_gap",
     *CUSTOM_TERRAIN_NAMES,
     "demo",
 }
@@ -155,7 +156,11 @@ TERRAIN_SETS = {
 TERRAIN_ALIASES = {
     "slanted_hurdle": "climbing_wall",
     "biased_gap": "asymmetric_gap",
-    "bean_gap": "beam_gap",
+}
+
+TERRAIN_EQUIVALENTS = {
+    "bean_gap": ("bean_gap", "beam_gap"),
+    "beam_gap": ("beam_gap", "bean_gap"),
 }
 
 
@@ -182,7 +187,7 @@ def _pop_eval_argv():
         default=None,
         help=(
             "Comma-separated terrain names; must match "
-            "env_cfg.terrain.terrain_dict keys."
+            "env_cfg.terrain.terrain_dict keys or supported aliases."
         ),
     )
     parser.add_argument("--episode_length_s", type=float, default=60.0)
@@ -226,12 +231,24 @@ def _zeroed_terrain_dict(env_cfg):
     return {name: 0.0 for name in env_cfg.terrain.terrain_dict.keys()}
 
 
+def _terrain_name_candidates(name):
+    if name in TERRAIN_EQUIVALENTS:
+        return TERRAIN_EQUIVALENTS[name]
+    if name in TERRAIN_ALIASES:
+        return (TERRAIN_ALIASES[name],)
+    return (name,)
+
+
 def _canonical_terrain_name(name, env_cfg):
     requested = name.strip()
-    name = TERRAIN_ALIASES.get(requested, requested)
+    candidates = _terrain_name_candidates(requested)
+    name = next(
+        (candidate for candidate in candidates if candidate in env_cfg.terrain.terrain_dict),
+        candidates[0],
+    )
     if name not in env_cfg.terrain.terrain_dict:
         raise ValueError(
-            f"Unknown terrain '{name}'. "
+            f"Unknown terrain '{requested}'. "
             f"Available: {sorted(env_cfg.terrain.terrain_dict.keys())}"
         )
     if name not in IMPLEMENTED_TERRAIN_NAMES:
@@ -254,8 +271,16 @@ def _normalize_weights(terrain_weights):
 def _current_custom_terrain_weights(env_cfg):
     weights = {}
     for name in CUSTOM_TERRAIN_NAMES:
-        if name in env_cfg.terrain.terrain_dict:
-            weights[name] = float(env_cfg.terrain.terrain_dict[name])
+        resolved_name = next(
+            (
+                candidate
+                for candidate in _terrain_name_candidates(name)
+                if candidate in env_cfg.terrain.terrain_dict
+            ),
+            None,
+        )
+        if resolved_name is not None:
+            weights[resolved_name] = float(env_cfg.terrain.terrain_dict[resolved_name])
     if any(weight > 0.0 for weight in weights.values()):
         return {name: weight for name, weight in weights.items() if weight > 0.0}
     return {name: 1.0 for name in weights}

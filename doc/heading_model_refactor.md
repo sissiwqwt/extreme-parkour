@@ -229,9 +229,16 @@ python -m py_compile \
 legged_gym/legged_gym/scripts/play.py
 legged_gym/legged_gym/scripts/evaluate.py
 legged_gym/legged_gym/scripts/evaluation.py
+legged_gym/legged_gym/scripts/distill_play.py
 ```
 
 注意：`play.py --use_jit` 走的是 traced policy 路径，不是普通 `.pt` checkpoint 加载路径；JIT 部署仍需要部署侧按导出的 `depth_heading_dim` 做对应处理。
+
+`distill_play.py` 的非 JIT 路径也已同步：
+
+- 非 heading checkpoint：按 `32 + 2` 切分，使用 `heading_output_scale * yaw_pred`；
+- heading checkpoint：按 `32 + 4` 切分，用 `atan2(sin, cos)` 转回 actor 的 `obs[:, 6:8]`；
+- runner 构造仍通过 `task_registry.make_alg_runner()`，因此同样受 checkpoint 自动识别保护。
 
 ## Smoke Test 更新
 
