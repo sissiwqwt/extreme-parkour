@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Runs the repaired heading-model-C experiment batch, evaluates each finished
 # policy, records fixed-terrain distill_play videos, and uploads artifacts to
-# Google Drive via rclone.
+# the selected cloud drive via rclone.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LEGGED_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
@@ -14,7 +14,8 @@ TASK="${TASK:-a1}"
 DEVICE="${DEVICE:-cuda:0}"
 RL_DEVICE="${RL_DEVICE:-${DEVICE}}"
 PROJ_NAME="${PROJ_NAME:-parkour_heading}"
-TEACHER_CHECKPOINT_PATH="${TEACHER_CHECKPOINT_PATH:-${1:-}}"
+TEACHER_CHECKPOINT_PATH="${TEACHER_CHECKPOINT_PATH:-}"
+UPLOAD_DRIVE="${UPLOAD_DRIVE:-quark}"
 
 HEADING_PRETRAIN_ITERS="${HEADING_PRETRAIN_ITERS:-1000}"
 MAX_ITERATIONS="${MAX_ITERATIONS:-5000}"
@@ -24,12 +25,17 @@ DISTILL_ENVS_PER_TERRAIN="${DISTILL_ENVS_PER_TERRAIN:-1}"
 DISTILL_USE_GPU="${DISTILL_USE_GPU:-1}"
 DISTILL_RECORD_CAMERA="${DISTILL_RECORD_CAMERA:-third_person}"
 
-GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
-GDRIVE_ROOT="${GDRIVE_ROOT:-extreme-parkour/heading_c_fix}"
+QUARK_REMOTE="${QUARK_REMOTE:-quark}"
+QUARK_ROOT="${QUARK_ROOT:-extreme-parkour/heading_c_fix}"
+BAIDU_REMOTE="${BAIDU_REMOTE:-baidu}"
+BAIDU_ROOT="${BAIDU_ROOT:-extreme-parkour/heading_c_fix}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${LEGGED_ROOT}/logs/heading_c_fix_artifacts}"
 
-# If GDrive/rclone is unavailable or unreachable, set to 0 and skip uploads.
-GDRIVE_AVAILABLE=0
+# If the selected rclone remote is unavailable or unreachable, skip uploads.
+UPLOAD_AVAILABLE=0
+UPLOAD_REMOTE=""
+UPLOAD_ROOT=""
+UPLOAD_NAME=""
 
 CONFIG_PATH="${LEGGED_ROOT}/legged_gym/envs/base/legged_robot_config.py"
 TRAIN_PY="${SCRIPT_DIR}/train.py"
@@ -39,14 +45,18 @@ DISTILL_PLAY_PY="${SCRIPT_DIR}/distill_play.py"
 usage() {
   cat <<EOF
 Usage:
-  TEACHER_CHECKPOINT_PATH=/path/to/model_XXXXX.pt bash $0
+  TEACHER_CHECKPOINT_PATH=/path/to/model_XXXXX.pt bash $0 --drive quark
+  bash $0 --drive baidu /path/to/model_XXXXX.pt
 
 Optional environment variables:
   TASK=${TASK}
   DEVICE=${DEVICE}
   PROJ_NAME=${PROJ_NAME}
-  GDRIVE_REMOTE=${GDRIVE_REMOTE}
-  GDRIVE_ROOT=${GDRIVE_ROOT}
+  UPLOAD_DRIVE=${UPLOAD_DRIVE}
+  QUARK_REMOTE=${QUARK_REMOTE}
+  QUARK_ROOT=${QUARK_ROOT}
+  BAIDU_REMOTE=${BAIDU_REMOTE}
+  BAIDU_ROOT=${BAIDU_ROOT}
   EVAL_EPISODES=${EVAL_EPISODES}
   DISTILL_ENVS_PER_TERRAIN=${DISTILL_ENVS_PER_TERRAIN}
 EOF
@@ -70,35 +80,135 @@ require_command() {
   fi
 }
 
-gdrive_target() {
-  local exptid="$1"
-  echo "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/${exptid}"
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --drive|--upload-drive)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for $1" >&2
+          usage >&2
+          exit 2
+        fi
+        UPLOAD_DRIVE="$2"
+        shift 2
+        ;;
+      --drive=*|--upload-drive=*)
+        UPLOAD_DRIVE="${1#*=}"
+        shift
+        ;;
+      --teacher-checkpoint-path)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for $1" >&2
+          usage >&2
+          exit 2
+        fi
+        TEACHER_CHECKPOINT_PATH="$2"
+        shift 2
+        ;;
+      --teacher-checkpoint-path=*)
+        TEACHER_CHECKPOINT_PATH="${1#*=}"
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "Unknown option: $1" >&2
+        usage >&2
+        exit 2
+        ;;
+      *)
+        if [[ -z "${TEACHER_CHECKPOINT_PATH}" ]]; then
+          TEACHER_CHECKPOINT_PATH="$1"
+        else
+          echo "Unexpected extra argument: $1" >&2
+          usage >&2
+          exit 2
+        fi
+        shift
+        ;;
+    esac
+  done
+
+  while [[ $# -gt 0 ]]; do
+    if [[ -z "${TEACHER_CHECKPOINT_PATH}" ]]; then
+      TEACHER_CHECKPOINT_PATH="$1"
+    else
+      echo "Unexpected extra argument: $1" >&2
+      usage >&2
+      exit 2
+    fi
+    shift
+  done
 }
 
-login_google_drive() {
+configure_upload_drive() {
+  case "${UPLOAD_DRIVE}" in
+    quark)
+      UPLOAD_REMOTE="${QUARK_REMOTE}"
+      UPLOAD_ROOT="${QUARK_ROOT}"
+      UPLOAD_NAME="Quark Cloud Drive"
+      ;;
+    baidu)
+      UPLOAD_REMOTE="${BAIDU_REMOTE}"
+      UPLOAD_ROOT="${BAIDU_ROOT}"
+      UPLOAD_NAME="Baidu Netdisk"
+      ;;
+    none|skip|off)
+      UPLOAD_REMOTE=""
+      UPLOAD_ROOT=""
+      UPLOAD_NAME="upload"
+      UPLOAD_AVAILABLE=0
+      ;;
+    *)
+      echo "Unsupported upload drive '${UPLOAD_DRIVE}'. Use one of: quark, baidu, none." >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+upload_target() {
+  local exptid="$1"
+  echo "${UPLOAD_REMOTE}:${UPLOAD_ROOT}/${exptid}"
+}
+
+login_upload_drive() {
+  configure_upload_drive
+
+  if [[ "${UPLOAD_DRIVE}" == "none" || "${UPLOAD_DRIVE}" == "skip" || "${UPLOAD_DRIVE}" == "off" ]]; then
+    echo "Upload disabled by --drive ${UPLOAD_DRIVE}." >&2
+    return 0
+  fi
+
   # If rclone is not installed or remote is not configured/unreachable,
-  # mark GDRIVE_AVAILABLE=0 and continue — uploads will be skipped.
+  # mark UPLOAD_AVAILABLE=0 and continue; uploads will be skipped.
   if ! command -v rclone >/dev/null 2>&1; then
-    echo "rclone not found; skipping Google Drive uploads." >&2
-    GDRIVE_AVAILABLE=0
+    echo "rclone not found; skipping ${UPLOAD_NAME} uploads." >&2
+    UPLOAD_AVAILABLE=0
     return 0
   fi
 
-  if ! rclone config show "${GDRIVE_REMOTE}" >/dev/null 2>&1; then
-    echo "rclone remote '${GDRIVE_REMOTE}' is not configured; skipping uploads." >&2
-    GDRIVE_AVAILABLE=0
+  if ! rclone config show "${UPLOAD_REMOTE}" >/dev/null 2>&1; then
+    echo "rclone remote '${UPLOAD_REMOTE}' is not configured; skipping uploads." >&2
+    UPLOAD_AVAILABLE=0
     return 0
   fi
 
-  echo "Checking Google Drive login for '${GDRIVE_REMOTE}:'..."
-  if ! rclone lsd "${GDRIVE_REMOTE}:" >/dev/null 2>&1; then
-    echo "Unable to reach Google Drive remote '${GDRIVE_REMOTE}:'. uploads will be skipped." >&2
-    GDRIVE_AVAILABLE=0
+  echo "Checking ${UPLOAD_NAME} login for '${UPLOAD_REMOTE}:'..."
+  if ! rclone lsd "${UPLOAD_REMOTE}:" >/dev/null 2>&1; then
+    echo "Unable to reach ${UPLOAD_NAME} remote '${UPLOAD_REMOTE}:'. uploads will be skipped." >&2
+    UPLOAD_AVAILABLE=0
     return 0
   fi
 
-  GDRIVE_AVAILABLE=1
-  echo "Google Drive remote '${GDRIVE_REMOTE}' is available."
+  UPLOAD_AVAILABLE=1
+  echo "${UPLOAD_NAME} remote '${UPLOAD_REMOTE}' is available."
 }
 
 active_terrains_csv() {
@@ -160,8 +270,8 @@ upload_dir() {
   local local_dir="$1"
   local remote_dir="$2"
   if [[ -d "${local_dir}" ]]; then
-    if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
-      echo "GDrive unavailable, skipping upload of directory ${local_dir}" >&2
+    if [[ "${UPLOAD_AVAILABLE}" != "1" ]]; then
+      echo "${UPLOAD_NAME} unavailable, skipping upload of directory ${local_dir}" >&2
       return 0
     fi
     if ! rclone copy "${local_dir}" "${remote_dir}"; then
@@ -174,8 +284,8 @@ upload_file() {
   local local_file="$1"
   local remote_dir="$2"
   if [[ -f "${local_file}" ]]; then
-    if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
-      echo "GDrive unavailable, skipping upload of file ${local_file}" >&2
+    if [[ "${UPLOAD_AVAILABLE}" != "1" ]]; then
+      echo "${UPLOAD_NAME} unavailable, skipping upload of file ${local_file}" >&2
       return 0
     fi
     if ! rclone copy "${local_file}" "${remote_dir}"; then
@@ -290,13 +400,13 @@ upload_artifacts() {
     return 0
   fi
 
-  if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
-    echo "Skipping upload for ${exptid} because Google Drive is unavailable." >&2
+  if [[ "${UPLOAD_AVAILABLE}" != "1" ]]; then
+    echo "Skipping upload for ${exptid} because ${UPLOAD_NAME} is unavailable." >&2
     return 0
   fi
 
   local remote
-  remote="$(gdrive_target "${exptid}")"
+  remote="$(upload_target "${exptid}")"
   echo "Uploading artifacts for ${exptid} to ${remote}"
   upload_file "${ckpt}" "${remote}/checkpoint"
   upload_dir "${ARTIFACT_ROOT}/${exptid}/evaluation" "${remote}/evaluation"
@@ -304,6 +414,8 @@ upload_artifacts() {
 }
 
 main() {
+  parse_args "$@"
+
   require_file "${TEACHER_CHECKPOINT_PATH}" "TEACHER_CHECKPOINT_PATH"
   require_file "${CONFIG_PATH}" "terrain config"
   require_file "${TRAIN_PY}" "train.py"
@@ -311,7 +423,7 @@ main() {
   require_file "${DISTILL_PLAY_PY}" "distill_play.py"
 
   mkdir -p "${ARTIFACT_ROOT}"
-  login_google_drive
+  login_upload_drive
 
   local terrains
   terrains="$(active_terrains_csv)"
@@ -322,10 +434,10 @@ main() {
   echo "Active terrains: ${terrains}"
 
   local experiments=(
-    "heading_c_fix_pre1000_latent1_unfreeze|1.0|False"
-    "heading_c_fix_pre1000_latent1_freeze|1.0|True"
-    "heading_c_fix_pre1000_latent025_unfreeze|0.25|False"
-    "heading_c_fix_pre1000_latent2_unfreeze|2.0|False"
+    "heading_pre1000_latent1_unfreeze|1.0|False"
+    "heading_pre1000_latent1_freeze|1.0|True"
+    "heading_pre1000_latent025_unfreeze|0.25|False"
+    "heading_pre1000_latent2_unfreeze|2.0|False"
   )
 
   for spec in "${experiments[@]}"; do
