@@ -77,6 +77,17 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+
+    value = value.lower()
+    if value in ("true", "t", "1", "yes", "y"):
+        return True
+    if value in ("false", "f", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got '{value}'.")
+
 def parse_sim_params(args, cfg):
     # code from Isaac Gym Preview 2
     # initialize sim params
@@ -133,12 +144,12 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             env_cfg.terrain.max_error = env_cfg.terrain.max_error_camera
             env_cfg.terrain.horizontal_scale = env_cfg.terrain.horizontal_scale_camera
             env_cfg.terrain.simplify_grid = True
-            env_cfg.terrain.terrain_dict["parkour_hurdle"] = 0.2
-            env_cfg.terrain.terrain_dict["parkour_flat"] = 0.05
-            env_cfg.terrain.terrain_dict["parkour_gap"] = 0.2
-            env_cfg.terrain.terrain_dict["parkour_step"] = 0.2
-            env_cfg.terrain.terrain_dict["demo"] = 0.15
-            env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
+            # env_cfg.terrain.terrain_dict["parkour_hurdle"] = 0.2
+            # env_cfg.terrain.terrain_dict["parkour_flat"] = 0.05
+            # env_cfg.terrain.terrain_dict["parkour_gap"] = 0.2
+            # env_cfg.terrain.terrain_dict["parkour_step"] = 0.2
+            # env_cfg.terrain.terrain_dict["demo"] = 0.15
+            # env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
         if env_cfg.depth.use_camera:
             env_cfg.terrain.y_range = [-0.1, 0.1]
 

@@ -186,7 +186,7 @@ class LeggedRobotCfg(BaseConfig):
                         "large stairs down": 0.,
                         "parkour": 0.15,
                         "parkour_hurdle": 0.1,
-                        "parkour_flat": 0.1,
+                        "parkour_flat": 0.05,
                         "parkour_step": 0.1,
                         "parkour_gap": 0.1,
                         "alternating_step": 0.1,
@@ -195,7 +195,7 @@ class LeggedRobotCfg(BaseConfig):
                         "parkour_v2": 0.15,
                         "narrow_gap": 0.1,
                         "climbing_wall": 0.1,
-                        "demo": 0.0,}
+                        "demo": 0.15,}
         terrain_proportions = list(terrain_dict.values())
         
         # trimesh only:

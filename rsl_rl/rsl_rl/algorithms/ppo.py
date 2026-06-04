@@ -324,7 +324,7 @@ class PPO:
     
     def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch, action_weight_batch=None):
         if self.if_depth:
-            action_loss = (actions_teacher_batch.detach() - actions_student_batch).pow(2).sum(dim=1)
+            action_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1)
             if action_weight_batch is not None:
                 action_weight_batch = action_weight_batch.detach().to(action_loss.device).view(-1)
                 depth_actor_loss = (action_weight_batch * action_loss).mean()
