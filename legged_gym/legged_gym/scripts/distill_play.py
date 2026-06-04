@@ -49,7 +49,7 @@ sim_params.physx.num_threads = 4
 
 
 DEFAULT_DISTILL_TERRAIN = "parkour_v2"
-DEFAULT_TERRAIN_DIFFICULTY = 1.0
+DEFAULT_TERRAIN_DIFFICULTY = 0.9
 DEFAULT_DISTILL_TERRAIN_ENVS = {
     "smooth slope": 0, 
     "rough slope up": 0,
@@ -70,11 +70,11 @@ DEFAULT_DISTILL_TERRAIN_ENVS = {
     "parkour_flat": 0,
     "parkour_step": 0,
     "parkour_gap": 0,
-    "alternating_step": 2,
+    "alternating_step": 0,
     "beam_gap": 2,
     "asymmetric_gap": 2,
     "parkour_v2": 2,
-    "narrow_gap": 2,
+    "narrow_gap": 0,
     "climbing_wall": 2,
     "demo": 0,
 }
@@ -254,7 +254,7 @@ def _apply_distill_terrain_config(env_cfg, terrain_counts, terrain_difficulty):
 
 
 def _patch_fixed_terrain_difficulty():
-    from legged_gym.utils import terrain_ver2 as terrain_module
+    from legged_gym.utils import terrain as terrain_module
 
     Terrain = terrain_module.Terrain
     if getattr(Terrain.curiculum, "_distill_fixed_difficulty_patch", False):

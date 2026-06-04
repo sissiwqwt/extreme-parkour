@@ -17,7 +17,7 @@ PROJ_NAME="${PROJ_NAME:-parkour_heading}"
 TEACHER_CHECKPOINT_PATH="${TEACHER_CHECKPOINT_PATH:-${1:-}}"
 
 HEADING_PRETRAIN_ITERS="${HEADING_PRETRAIN_ITERS:-1000}"
-MAX_ITERATIONS="${MAX_ITERATIONS:-7000}"
+MAX_ITERATIONS="${MAX_ITERATIONS:-5000}"
 EVAL_EPISODES="${EVAL_EPISODES:-256}"
 EVAL_NUM_ENVS="${EVAL_NUM_ENVS:-128}"
 DISTILL_ENVS_PER_TERRAIN="${DISTILL_ENVS_PER_TERRAIN:-1}"
@@ -27,6 +27,9 @@ DISTILL_RECORD_CAMERA="${DISTILL_RECORD_CAMERA:-third_person}"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-extreme-parkour/heading_c_fix}"
 ARTIFACT_ROOT="${ARTIFACT_ROOT:-${LEGGED_ROOT}/logs/heading_c_fix_artifacts}"
+
+# If GDrive/rclone is unavailable or unreachable, set to 0 and skip uploads.
+GDRIVE_AVAILABLE=0
 
 CONFIG_PATH="${LEGGED_ROOT}/legged_gym/envs/base/legged_robot_config.py"
 TRAIN_PY="${SCRIPT_DIR}/train.py"
@@ -73,13 +76,29 @@ gdrive_target() {
 }
 
 login_google_drive() {
-  require_command rclone
-  if ! rclone config show "${GDRIVE_REMOTE}" >/dev/null 2>&1; then
-    echo "rclone remote '${GDRIVE_REMOTE}' is not configured. Opening rclone config..."
-    rclone config
+  # If rclone is not installed or remote is not configured/unreachable,
+  # mark GDRIVE_AVAILABLE=0 and continue — uploads will be skipped.
+  if ! command -v rclone >/dev/null 2>&1; then
+    echo "rclone not found; skipping Google Drive uploads." >&2
+    GDRIVE_AVAILABLE=0
+    return 0
   fi
-  echo "Checking Google Drive login for '${GDRIVE_REMOTE}:'."
-  rclone lsd "${GDRIVE_REMOTE}:" >/dev/null
+
+  if ! rclone config show "${GDRIVE_REMOTE}" >/dev/null 2>&1; then
+    echo "rclone remote '${GDRIVE_REMOTE}' is not configured; skipping uploads." >&2
+    GDRIVE_AVAILABLE=0
+    return 0
+  fi
+
+  echo "Checking Google Drive login for '${GDRIVE_REMOTE}:'..."
+  if ! rclone lsd "${GDRIVE_REMOTE}:" >/dev/null 2>&1; then
+    echo "Unable to reach Google Drive remote '${GDRIVE_REMOTE}:'. uploads will be skipped." >&2
+    GDRIVE_AVAILABLE=0
+    return 0
+  fi
+
+  GDRIVE_AVAILABLE=1
+  echo "Google Drive remote '${GDRIVE_REMOTE}' is available."
 }
 
 active_terrains_csv() {
@@ -141,7 +160,13 @@ upload_dir() {
   local local_dir="$1"
   local remote_dir="$2"
   if [[ -d "${local_dir}" ]]; then
-    rclone copy "${local_dir}" "${remote_dir}"
+    if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
+      echo "GDrive unavailable, skipping upload of directory ${local_dir}" >&2
+      return 0
+    fi
+    if ! rclone copy "${local_dir}" "${remote_dir}"; then
+      echo "Warning: failed to upload directory ${local_dir} to ${remote_dir}" >&2
+    fi
   fi
 }
 
@@ -149,7 +174,13 @@ upload_file() {
   local local_file="$1"
   local remote_dir="$2"
   if [[ -f "${local_file}" ]]; then
-    rclone copy "${local_file}" "${remote_dir}"
+    if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
+      echo "GDrive unavailable, skipping upload of file ${local_file}" >&2
+      return 0
+    fi
+    if ! rclone copy "${local_file}" "${remote_dir}"; then
+      echo "Warning: failed to upload file ${local_file} to ${remote_dir}" >&2
+    fi
   fi
 }
 
@@ -159,6 +190,8 @@ run_train() {
   local freeze_backbone="$3"
 
   echo "Training ${exptid}"
+  local log_dir="${LEGGED_ROOT}/logs/${PROJ_NAME}/${exptid}"
+  mkdir -p "${log_dir}"
   (
     cd "${SCRIPT_DIR}"
     "${PYTHON_BIN}" "${TRAIN_PY}" \
@@ -253,8 +286,13 @@ upload_artifacts() {
   local ckpt
   ckpt="$(latest_checkpoint "${log_dir}")"
   if [[ -z "${ckpt}" ]]; then
-    echo "No checkpoint found in ${log_dir}" >&2
-    exit 1
+    echo "No checkpoint found in ${log_dir}, skipping upload for ${exptid}" >&2
+    return 0
+  fi
+
+  if [[ "${GDRIVE_AVAILABLE}" != "1" ]]; then
+    echo "Skipping upload for ${exptid} because Google Drive is unavailable." >&2
+    return 0
   fi
 
   local remote

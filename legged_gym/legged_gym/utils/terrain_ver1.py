@@ -82,7 +82,7 @@ def _beam_gap_params(difficulty):
 def _asymmetric_gap_params(difficulty):
     difficulty = _difficulty(difficulty)
     return {
-        "gap_size": 0.2 + 0.2 * difficulty,
+        "gap_size": 0.2 + 0.15 * difficulty,
         "x_range": [1.0, 1.6],
         "corridor_half_width": 0.6 - 0.1 * difficulty,
         "lateral_offset": 0.25 + 0.35 * difficulty,
@@ -1848,14 +1848,14 @@ def parkour_v2_terrain(
             terrain.height_field_raw[cx0:cx1, cy0:cy1] = platform_height_px
 
     goal_count_by_type = {
-        # "alternating_gap": 2,
+#        "alternating_gap": 2,
         "beam_gap": 4,
         "biased_gap": 2,
         "narrow_gap": 3,
         "climbing_wall": 3,
     }
     min_len_by_type = {
-        # "alternating_gap": 2 * alt_dis_x_min,
+#        "alternating_gap": 2 * alt_dis_x_min,
         "beam_gap": 2 * beam_dis_x_min + beam_gap_size_px,
         "biased_gap": 2 * biased_dis_x_min + biased_gap_size_px,
         "narrow_gap": 3 * narrow_dis_x_min,
@@ -1877,29 +1877,29 @@ def parkour_v2_terrain(
         seg_type = np.random.choice(valid_seg_types)
         start_x = cur_x
 
-        if seg_type == "alternating_gap":
-            step_lengths = [sample_forward(alt_dis_x_min, alt_dis_x_max), sample_forward(alt_dis_x_min, alt_dis_x_max)]
-            seg_end = start_x + sum(step_lengths)
-            if seg_end > terrain.width - end_margin_px:
-                break
+        #if seg_type == "alternating_gap":
+        #    step_lengths = [sample_forward(alt_dis_x_min, alt_dis_x_max), sample_forward(alt_dis_x_min, alt_dis_x_max)]
+        #    seg_end = start_x + sum(step_lengths)
+        #    if seg_end > terrain.width - end_margin_px:
+        #        break
 
-            raw_offset = np.random.randint(alt_dis_y_min, alt_dis_y_max + 1)
-            lateral_offset = max(abs(raw_offset), max(round(0.1 / terrain.horizontal_scale), 1))
-            centers_y = [
-                clip_center_y(mid_y + lateral_offset, alt_half_valid_width),
-                clip_center_y(mid_y - lateral_offset, alt_half_valid_width),
-            ]
+        #    raw_offset = np.random.randint(alt_dis_y_min, alt_dis_y_max + 1)
+        #    lateral_offset = max(abs(raw_offset), max(round(0.1 / terrain.horizontal_scale), 1))
+        #    centers_y = [
+        #        clip_center_y(mid_y + lateral_offset, alt_half_valid_width),
+        #        clip_center_y(mid_y - lateral_offset, alt_half_valid_width),
+        #    ]
 
-            local_x = start_x
-            for step_idx, (step_len, center_y) in enumerate(zip(step_lengths, centers_y)):
-                step_end = local_x + step_len
-                cur_h = alt_step_height_px if step_idx == 0 else -alt_step_height_px
-                terrain.height_field_raw[local_x:step_end, :] = cur_h
-                terrain.height_field_raw[local_x:step_end, :max(center_y - alt_half_valid_width, 0)] = 0
-                terrain.height_field_raw[local_x:step_end, min(center_y + alt_half_valid_width, terrain.length):] = 0
-                append_goal([local_x + step_len // 2, center_y])
-                local_x = step_end
-            cur_x = local_x
+         #   local_x = start_x
+        #    for step_idx, (step_len, center_y) in enumerate(zip(step_lengths, centers_y)):
+        #        step_end = local_x + step_len
+        #        cur_h = alt_step_height_px if step_idx == 0 else -alt_step_height_px
+        #        terrain.height_field_raw[local_x:step_end, :] = cur_h
+        #        terrain.height_field_raw[local_x:step_end, :max(center_y - alt_half_valid_width, 0)] = 0
+        #        terrain.height_field_raw[local_x:step_end, min(center_y + alt_half_valid_width, terrain.length):] = 0
+        #        append_goal([local_x + step_len // 2, center_y])
+        #        local_x = step_end
+        #    cur_x = local_x
 
         if seg_type == "beam_gap":
             beam1_len = sample_forward(beam_dis_x_min, beam_dis_x_max)
@@ -2055,74 +2055,77 @@ def parkour_v2_terrain(
 # end of new terrain
 
 def demo_terrain(terrain):
-    goals = []
+    goals = np.zeros((8, 2))
     mid_y = terrain.length // 2
+    
+    # hurdle
     platform_length = round(2 / terrain.horizontal_scale)
+    hurdle_depth = round(np.random.uniform(0.35, 0.4) / terrain.horizontal_scale)
+    hurdle_height = round(np.random.uniform(0.3, 0.36) / terrain.vertical_scale)
+    hurdle_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
+    goals[0] = [platform_length + hurdle_depth/2, mid_y]
+    terrain.height_field_raw[platform_length:platform_length+hurdle_depth, round(mid_y-hurdle_width/2):round(mid_y+hurdle_width/2)] = hurdle_height
+    
+    # step up
+    platform_length += round(np.random.uniform(1.5, 2.5) / terrain.horizontal_scale)
+    first_step_depth = round(np.random.uniform(0.45, 0.8) / terrain.horizontal_scale)
+    first_step_height = round(np.random.uniform(0.35, 0.45) / terrain.vertical_scale)
+    first_step_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
+    goals[1] = [platform_length+first_step_depth/2, mid_y]
+    terrain.height_field_raw[platform_length:platform_length+first_step_depth, round(mid_y-first_step_width/2):round(mid_y+first_step_width/2)] = first_step_height
+    
+    platform_length += first_step_depth
+    second_step_depth = round(np.random.uniform(0.45, 0.8) / terrain.horizontal_scale)
+    second_step_height = first_step_height
+    second_step_width = first_step_width
+    goals[2] = [platform_length+second_step_depth/2, mid_y]
+    terrain.height_field_raw[platform_length:platform_length+second_step_depth, round(mid_y-second_step_width/2):round(mid_y+second_step_width/2)] = second_step_height
+    
+    # gap
+    platform_length += second_step_depth
+    gap_size = round(np.random.uniform(0.5, 0.8) / terrain.horizontal_scale)
+    
+    # step down
+    platform_length += gap_size
+    third_step_depth = round(np.random.uniform(0.25, 0.6) / terrain.horizontal_scale)
+    third_step_height = first_step_height
+    third_step_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
+    goals[3] = [platform_length+third_step_depth/2, mid_y]
+    terrain.height_field_raw[platform_length:platform_length+third_step_depth, round(mid_y-third_step_width/2):round(mid_y+third_step_width/2)] = third_step_height
+    
+    platform_length += third_step_depth
+    forth_step_depth = round(np.random.uniform(0.25, 0.6) / terrain.horizontal_scale)
+    forth_step_height = first_step_height
+    forth_step_width = third_step_width
+    goals[4] = [platform_length+forth_step_depth/2, mid_y]
+    terrain.height_field_raw[platform_length:platform_length+forth_step_depth, round(mid_y-forth_step_width/2):round(mid_y+forth_step_width/2)] = forth_step_height
+    
+    # parkour
+    platform_length += forth_step_depth
+    gap_size = round(np.random.uniform(0.1, 0.4) / terrain.horizontal_scale)
+    platform_length += gap_size
+    
+    left_y = mid_y + round(np.random.uniform(0.15, 0.3) / terrain.horizontal_scale)
+    right_y = mid_y - round(np.random.uniform(0.15, 0.3) / terrain.horizontal_scale)
+    
+    slope_height = round(np.random.uniform(0.15, 0.22) / terrain.vertical_scale)
+    slope_depth = round(np.random.uniform(0.75, 0.85) / terrain.horizontal_scale)
+    slope_width = round(1.0 / terrain.horizontal_scale)
+    
+    platform_height = slope_height + np.random.randint(0, 0.2 / terrain.vertical_scale)
 
-    def add_gap(min_gap, max_gap):
-        nonlocal platform_length
-        platform_length += round(np.random.uniform(min_gap, max_gap) / terrain.horizontal_scale)
-
-    def add_block(depth, height, width, goal_y=mid_y):
-        nonlocal platform_length
-        y0 = round(goal_y - width / 2)
-        y1 = round(goal_y + width / 2)
-        goals.append([platform_length + depth / 2, goal_y])
-        terrain.height_field_raw[platform_length:platform_length + depth, y0:y1] = height
-        platform_length += depth
-
-    def add_hurdle():
-        hurdle_depth = round(np.random.uniform(0.35, 0.4) / terrain.horizontal_scale)
-        hurdle_height = round(np.random.uniform(0.3, 0.36) / terrain.vertical_scale)
-        hurdle_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
-        add_block(hurdle_depth, hurdle_height, hurdle_width)
-
-    def add_step_up():
-        add_gap(1.5, 2.5)
-        step_height = round(np.random.uniform(0.35, 0.45) / terrain.vertical_scale)
-        step_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
-        for _ in range(2):
-            step_depth = round(np.random.uniform(0.45, 0.8) / terrain.horizontal_scale)
-            add_block(step_depth, step_height, step_width)
-
-    def add_step_down():
-        add_gap(0.5, 0.8)
-        step_height = round(np.random.uniform(0.35, 0.45) / terrain.vertical_scale)
-        step_width = round(np.random.uniform(1, 1.2) / terrain.horizontal_scale)
-        for _ in range(2):
-            step_depth = round(np.random.uniform(0.25, 0.6) / terrain.horizontal_scale)
-            add_block(step_depth, step_height, step_width)
-
-    def add_parkour():
-        nonlocal platform_length
-        gap_size = round(np.random.uniform(0.1, 0.4) / terrain.horizontal_scale)
-        platform_length += gap_size
-
-        left_y = mid_y + round(np.random.uniform(0.15, 0.3) / terrain.horizontal_scale)
-        right_y = mid_y - round(np.random.uniform(0.15, 0.3) / terrain.horizontal_scale)
-
-        slope_height = round(np.random.uniform(0.15, 0.22) / terrain.vertical_scale)
-        slope_depth = round(np.random.uniform(0.75, 0.85) / terrain.horizontal_scale)
-        slope_width = round(1.0 / terrain.horizontal_scale)
-        platform_height = slope_height + np.random.randint(0, max(round(0.2 / terrain.vertical_scale), 1))
-
-        goals.append([platform_length + slope_depth / 2, left_y])
-        heights = np.tile(np.linspace(-slope_height, slope_height, slope_width), (slope_depth, 1))
-        terrain.height_field_raw[platform_length:platform_length + slope_depth, left_y - slope_width // 2:left_y + slope_width // 2] = heights.astype(int) + platform_height
-
-        platform_length += slope_depth + gap_size
-        goals.append([platform_length + slope_depth / 2, right_y])
-        heights = np.tile(np.linspace(-slope_height, slope_height, slope_width), (slope_depth, 1)) * -1
-        terrain.height_field_raw[platform_length:platform_length + slope_depth, right_y - slope_width // 2:right_y + slope_width // 2] = heights.astype(int) + platform_height
-
-        platform_length += slope_depth + gap_size + round(0.4 / terrain.horizontal_scale)
-        goals.append([platform_length, left_y])
-
-    segments = [add_hurdle, add_step_up, add_step_down, add_parkour]
-    for segment_idx in np.random.permutation(len(segments)):
-        segments[segment_idx]()
-
-    terrain.goals = np.array(goals) * terrain.horizontal_scale
+    goals[5] = [platform_length+slope_depth/2, left_y]
+    heights = np.tile(np.linspace(-slope_height, slope_height, slope_width), (slope_depth, 1)) * 1
+    terrain.height_field_raw[platform_length:platform_length+slope_depth, left_y-slope_width//2: left_y+slope_width//2] = heights.astype(int) + platform_height
+    
+    platform_length += slope_depth + gap_size
+    goals[6] = [platform_length+slope_depth/2, right_y]
+    heights = np.tile(np.linspace(-slope_height, slope_height, slope_width), (slope_depth, 1)) * -1
+    terrain.height_field_raw[platform_length:platform_length+slope_depth, right_y-slope_width//2: right_y+slope_width//2] = heights.astype(int) + platform_height
+    
+    platform_length += slope_depth + gap_size + round(0.4 / terrain.horizontal_scale)
+    goals[-1] = [platform_length, left_y]
+    terrain.goals = goals * terrain.horizontal_scale
 
 def pit_terrain(terrain, depth, platform_size=1.):
     depth = int(depth / terrain.vertical_scale)
