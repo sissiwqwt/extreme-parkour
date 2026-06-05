@@ -214,6 +214,23 @@ def _pop_eval_argv():
         default="auto",
         help="auto uses --use_camera to choose depth vs base inference.",
     )
+    parser.add_argument(
+        "--heading_eval_mode",
+        choices=("predicted", "oracle", "corrupted"),
+        default="predicted",
+        help=(
+            "Depth-policy heading input used only during evaluation. predicted "
+            "uses the depth encoder output, oracle uses the ground-truth actor "
+            "heading from obs, and corrupted adds Gaussian noise to the actor "
+            "yaw input."
+        ),
+    )
+    parser.add_argument(
+        "--heading_corruption_std",
+        type=float,
+        default=0.5,
+        help="Gaussian yaw noise std in radians for --heading_eval_mode corrupted.",
+    )
     ns, rest = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     return ns
@@ -437,6 +454,22 @@ def _heading_to_actor_yaw(heading_pred, depth_encoder_cfg):
     return torch.stack((delta_yaw, delta_next_yaw), dim=-1)
 
 
+def _wrap_yaw_pair(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
+
+
+def _heading_eval_actor_yaw(eval_cfg, obs, heading_pred, depth_encoder_cfg):
+    predicted_yaw = _heading_to_actor_yaw(heading_pred, depth_encoder_cfg)
+    if eval_cfg.heading_eval_mode == "predicted":
+        return predicted_yaw
+    if eval_cfg.heading_eval_mode == "oracle":
+        return obs[:, 6:8]
+    if eval_cfg.heading_eval_mode == "corrupted":
+        noise = torch.randn_like(predicted_yaw) * float(eval_cfg.heading_corruption_std)
+        return _wrap_yaw_pair(predicted_yaw + noise)
+    raise ValueError(f"Unsupported heading_eval_mode: {eval_cfg.heading_eval_mode}")
+
+
 def _install_terminal_snapshot(env):
     env._eval_terminal_valid = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
     env._eval_terminal_final_x = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
@@ -485,7 +518,7 @@ def _make_eval_env(name, args, env_cfg, terrain_dict):
     return env, env_cfg
 
 
-def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
+def _run_policy_step(args, eval_cfg, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
     depth_latent = None
     heading_loss = None
     if policy_type == "depth":
@@ -500,7 +533,9 @@ def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, p
             )
             heading_target = _heading_label(obs, depth_encoder_cfg)
             heading_loss = (heading_target - heading_pred).norm(p=2, dim=1)
-            obs[:, 6:8] = _heading_to_actor_yaw(heading_pred, depth_encoder_cfg)
+            obs[:, 6:8] = _heading_eval_actor_yaw(
+                eval_cfg, obs, heading_pred, depth_encoder_cfg
+            )
 
     with torch.no_grad():
         if policy_type == "depth" and hasattr(ppo_runner.alg, "depth_actor"):
@@ -566,6 +601,10 @@ def evaluate(args, eval_cfg):
     )
     os.makedirs(output_dir, exist_ok=True)
     basename_parts = [policy_type, eval_cfg.terrain_set]
+    if policy_type == "depth":
+        basename_parts.append(eval_cfg.heading_eval_mode)
+        if eval_cfg.heading_eval_mode == "corrupted":
+            basename_parts.append(f"std{eval_cfg.heading_corruption_std:g}")
     if _all_difficulty_mode(eval_cfg):
         basename_parts.append("all-difficulty")
     basename_parts.append(checkpoint)
@@ -606,7 +645,7 @@ def evaluate(args, eval_cfg):
 
     for step in range(max_steps):
         actions, heading_loss = _run_policy_step(
-            args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type
+            args, eval_cfg, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type
         )
         if heading_loss is not None:
             heading_loss_sum += heading_loss.detach()
@@ -815,6 +854,8 @@ def _summarize(
         "difficulty_csv_path": difficulty_csv_path,
         "resolved_log_path": resolved_log_pth,
         "policy_type": policy_type,
+        "heading_eval_mode": eval_cfg.heading_eval_mode,
+        "heading_corruption_std": eval_cfg.heading_corruption_std,
         "terrain_dict": env_cfg.terrain.terrain_dict,
         "difficulty_mode": eval_cfg.difficulty_mode,
         "all_difficulties": list(ALL_DIFFICULTIES) if _all_difficulty_mode(eval_cfg) else [],

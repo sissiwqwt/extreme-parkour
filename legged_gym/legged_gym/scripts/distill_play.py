@@ -156,6 +156,22 @@ def _pop_script_argv():
         action="store_true",
         help="Enable GPU simulation and RL. Default: False (CPU only, safer).",
     )
+    p.add_argument(
+        "--heading_eval_mode",
+        choices=("predicted", "oracle", "corrupted"),
+        default="predicted",
+        help=(
+            "Depth-policy heading input for non-JIT playback. predicted uses the "
+            "depth encoder output, oracle uses obs[:, 6:8], and corrupted adds "
+            "Gaussian yaw noise to the predicted actor heading."
+        ),
+    )
+    p.add_argument(
+        "--heading_corruption_std",
+        type=float,
+        default=0.5,
+        help="Gaussian yaw noise std in radians for --heading_eval_mode corrupted.",
+    )
     ns, rest = p.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     return ns
@@ -207,6 +223,22 @@ def _heading_to_actor_yaw(heading_pred, depth_encoder_cfg):
     delta_yaw = torch.atan2(heading_pred[:, 1], heading_pred[:, 0])
     delta_next_yaw = torch.atan2(heading_pred[:, 3], heading_pred[:, 2])
     return torch.stack((delta_yaw, delta_next_yaw), dim=-1)
+
+
+def _wrap_yaw_pair(yaw):
+    return torch.atan2(torch.sin(yaw), torch.cos(yaw))
+
+
+def _heading_eval_actor_yaw(rec_cfg, obs, heading_pred, depth_encoder_cfg):
+    predicted_yaw = _heading_to_actor_yaw(heading_pred, depth_encoder_cfg)
+    if rec_cfg.heading_eval_mode == "predicted":
+        return predicted_yaw
+    if rec_cfg.heading_eval_mode == "oracle":
+        return obs[:, 6:8]
+    if rec_cfg.heading_eval_mode == "corrupted":
+        noise = torch.randn_like(predicted_yaw) * float(rec_cfg.heading_corruption_std)
+        return _wrap_yaw_pair(predicted_yaw + noise)
+    raise ValueError(f"Unsupported heading_eval_mode: {rec_cfg.heading_eval_mode}")
 
 
 def _default_video_dir():
@@ -683,8 +715,8 @@ def play_headless_record(args, rec_cfg):
                         depth_latent, heading_pred = _split_depth_heading(
                             depth_latent_and_heading, depth_encoder_cfg
                         )
-                        obs[:, 6:8] = _heading_to_actor_yaw(
-                            heading_pred, depth_encoder_cfg
+                        obs[:, 6:8] = _heading_eval_actor_yaw(
+                            rec_cfg, obs, heading_pred, depth_encoder_cfg
                         )
                 else:
                     depth_latent = None
