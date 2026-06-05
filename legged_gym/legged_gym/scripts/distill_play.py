@@ -71,11 +71,11 @@ DEFAULT_DISTILL_TERRAIN_ENVS = {
     "parkour_step": 0,
     "parkour_gap": 0,
     "alternating_step": 0,
-    "beam_gap": 2,
-    "asymmetric_gap": 2,
-    "parkour_v2": 2,
+    "beam_gap": 1,
+    "asymmetric_gap": 1,
+    "parkour_v2": 1,
     "narrow_gap": 0,
-    "climbing_wall": 2,
+    "climbing_wall": 0,
     "demo": 0,
 }
 
@@ -87,7 +87,7 @@ def _pop_script_argv():
         "--video_out",
         type=str,
         default=None,
-        help="Output directory for mp4 files. Default: legged_gym/demos.",
+        help="Output directory for mp4 files. Default: legged_gym/demos_basedistill.",
     )
     p.add_argument(
         "--video_fps",
@@ -312,6 +312,10 @@ def _patch_fixed_terrain_difficulty():
 def _make_env_with_terrain_override(name, args, env_cfg, terrain_counts, terrain_difficulty):
     task_class = task_registry.get_task_class(name)
     env_cfg, _ = update_cfg_from_args(env_cfg, None, args)
+    # Camera/headless mode enables mesh simplification in update_cfg_from_args().
+    # For gap-heavy terrains this can remove collision-critical edges and create
+    # real holes in the trimesh, so recording should keep the full grid mesh.
+    env_cfg.terrain.simplify_grid = False
     _apply_distill_terrain_config(env_cfg, terrain_counts, terrain_difficulty)
     set_seed(env_cfg.seed)
 
