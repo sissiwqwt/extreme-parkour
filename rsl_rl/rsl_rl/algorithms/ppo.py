@@ -322,7 +322,16 @@ class PPO:
             self.depth_encoder_optimizer.step()
             return depth_encoder_loss.item()
     
-    def update_depth_actor(self, actions_student_batch, actions_teacher_batch, yaw_student_batch, yaw_teacher_batch, action_weight_batch=None):
+    def update_depth_actor(
+        self,
+        actions_student_batch,
+        actions_teacher_batch,
+        yaw_student_batch,
+        yaw_teacher_batch,
+        action_weight_batch=None,
+        depth_latent_batch=None,
+        scandots_latent_batch=None,
+    ):
         if self.if_depth:
             action_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1)
             if action_weight_batch is not None:
@@ -331,14 +340,18 @@ class PPO:
             else:
                 depth_actor_loss = action_loss.mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
+            if depth_latent_batch is not None and scandots_latent_batch is not None:
+                depth_encoder_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
+            else:
+                depth_encoder_loss = depth_actor_loss.new_tensor(0.0)
 
-            loss = depth_actor_loss + yaw_loss
+            loss = depth_encoder_loss + depth_actor_loss + yaw_loss
 
             self.depth_actor_optimizer.zero_grad()
             loss.backward()
-            nn.utils.clip_grad_norm_(self.depth_actor.parameters(), self.max_grad_norm)
+            nn.utils.clip_grad_norm_([*self.depth_actor.parameters(), *self.depth_encoder.parameters()], self.max_grad_norm)
             self.depth_actor_optimizer.step()
-            return depth_actor_loss.item(), yaw_loss.item()
+            return depth_encoder_loss.item(), depth_actor_loss.item(), yaw_loss.item()
     
     def update_depth_both(self, depth_latent_batch, scandots_latent_batch, actions_student_batch, actions_teacher_batch):
         if self.if_depth:

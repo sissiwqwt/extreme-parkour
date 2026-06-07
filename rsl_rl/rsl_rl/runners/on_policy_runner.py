@@ -251,7 +251,7 @@ class OnPolicyRunner:
         infos["delta_yaw_ok"] = torch.ones(self.env.num_envs, dtype=torch.bool, device=self.device)
         self.alg.depth_encoder.train()
         self.alg.depth_actor.train()
-        use_action_weight = self.depth_encoder_cfg.get("action_loss_use_weight", True)
+        use_action_weight = self.depth_encoder_cfg.get("action_loss_use_weight", False)
 
         num_pretrain_iter = 0
         for it in range(self.current_learning_iteration, tot_iter):
@@ -331,9 +331,6 @@ class OnPolicyRunner:
             delta_yaw_ok_percentage = sum(delta_yaw_ok_buffer) / len(delta_yaw_ok_buffer)
             scandots_latent_buffer = torch.cat(scandots_latent_buffer, dim=0)
             depth_latent_buffer = torch.cat(depth_latent_buffer, dim=0)
-            depth_encoder_loss = 0
-            # depth_encoder_loss = self.alg.update_depth_encoder(depth_latent_buffer, scandots_latent_buffer)
-
             actions_teacher_buffer = torch.cat(actions_teacher_buffer, dim=0)
             actions_student_buffer = torch.cat(actions_student_buffer, dim=0)
             yaw_buffer_student = torch.cat(yaw_buffer_student, dim=0)
@@ -343,9 +340,15 @@ class OnPolicyRunner:
             action_loss_weight_mean = action_weight_buffer.mean().item()
             near_failure_score_mean = near_failure_score_buffer.mean().item()
             action_weight_batch = action_weight_buffer if use_action_weight else None
-            depth_actor_loss, yaw_loss = self.alg.update_depth_actor(actions_student_buffer, actions_teacher_buffer, yaw_buffer_student, yaw_buffer_teacher, action_weight_batch)
-
-            # depth_encoder_loss, depth_actor_loss = self.alg.update_depth_both(depth_latent_buffer, scandots_latent_buffer, actions_student_buffer, actions_teacher_buffer)
+            depth_encoder_loss, depth_actor_loss, yaw_loss = self.alg.update_depth_actor(
+                actions_student_buffer,
+                actions_teacher_buffer,
+                yaw_buffer_student,
+                yaw_buffer_teacher,
+                action_weight_batch,
+                depth_latent_buffer,
+                scandots_latent_buffer,
+            )
             stop = time.time()
             learn_time = stop - start
 
