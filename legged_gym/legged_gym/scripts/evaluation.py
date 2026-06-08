@@ -13,6 +13,7 @@ import os
 import re
 import sys
 from collections import defaultdict
+from datetime import datetime
 
 import faulthandler
 
@@ -167,6 +168,12 @@ TERRAIN_EQUIVALENTS = {
 def _pop_eval_argv():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--policy_id", type=str, default=None)
+    parser.add_argument(
+        "--run_id",
+        type=str,
+        default=None,
+        help="Unique suffix for output filenames. Defaults to a timestamp.",
+    )
     parser.add_argument("--eval_episodes", type=int, default=256)
     parser.add_argument("--eval_max_steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
@@ -596,11 +603,16 @@ def evaluate(args, eval_cfg):
 
     policy_id = eval_cfg.policy_id or args.exptid or "policy"
     checkpoint = _checkpoint_label(args)
+    run_id = eval_cfg.run_id or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     output_dir = eval_cfg.output_dir or os.path.join(
-        LEGGED_GYM_ROOT_DIR, "logs", "evaluation"
+        LEGGED_GYM_ROOT_DIR,
+        "logs",
+        "evaluation",
+        _safe_filename(args.proj_name),
+        _safe_filename(args.exptid or policy_id),
     )
     os.makedirs(output_dir, exist_ok=True)
-    basename_parts = [policy_type, eval_cfg.terrain_set]
+    basename_parts = [policy_id, policy_type, eval_cfg.terrain_set]
     if policy_type == "depth":
         basename_parts.append(eval_cfg.heading_eval_mode)
         if eval_cfg.heading_eval_mode == "corrupted":
@@ -608,6 +620,7 @@ def evaluate(args, eval_cfg):
     if _all_difficulty_mode(eval_cfg):
         basename_parts.append("all-difficulty")
     basename_parts.append(checkpoint)
+    basename_parts.append(run_id)
     basename = "_".join(_safe_filename(part) for part in basename_parts)
     csv_path = os.path.join(output_dir, basename + ".csv")
     terrain_csv_path = os.path.join(output_dir, basename + "_by_terrain.csv")
