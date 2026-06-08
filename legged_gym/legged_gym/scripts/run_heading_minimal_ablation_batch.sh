@@ -79,6 +79,41 @@ require_file() {
   fi
 }
 
+is_true() {
+  [[ "$1" == "1" || "$1" == "true" || "$1" == "True" || "$1" == "yes" || "$1" == "Yes" ]]
+}
+
+supports_train_heading_head_arg() {
+  local helpers_path="${LEGGED_ROOT}/legged_gym/utils/helpers.py"
+  local config_path="${LEGGED_ROOT}/legged_gym/envs/base/legged_robot_config.py"
+  local ppo_path="${LEGGED_ROOT}/../rsl_rl/rsl_rl/algorithms/ppo.py"
+  [[ -f "${helpers_path}" ]] || return 1
+  [[ -f "${config_path}" ]] || return 1
+  [[ -f "${ppo_path}" ]] || return 1
+  grep -q -- "--train_heading_head_during_action_distillation" "${helpers_path}" || return 1
+  grep -q -- "train_heading_head_during_action_distillation" "${config_path}" || return 1
+  grep -q -- "train_heading_head_during_action_distillation" "${ppo_path}" || return 1
+}
+
+require_train_heading_head_support() {
+  if supports_train_heading_head_arg; then
+    return 0
+  fi
+  cat >&2 <<EOF
+Requested train_heading_head=True, but this checkout does not fully support
+--train_heading_head_during_action_distillation.
+
+Expected support in:
+  ${LEGGED_ROOT}/legged_gym/utils/helpers.py
+  ${LEGGED_ROOT}/legged_gym/envs/base/legged_robot_config.py
+  ${LEGGED_ROOT}/../rsl_rl/rsl_rl/algorithms/ppo.py
+
+Update the training code before running the second-stage heading-head unfreeze
+experiment.
+EOF
+  exit 2
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -232,6 +267,14 @@ run_train() {
   local latent_weight="$3"
   local freeze_backbone="$4"
   local train_heading_head="${5:-False}"
+  local train_heading_head_args=()
+
+  if is_true "${train_heading_head}"; then
+    require_train_heading_head_support
+    train_heading_head_args+=(--train_heading_head_during_action_distillation "${train_heading_head}")
+  elif supports_train_heading_head_arg; then
+    train_heading_head_args+=(--train_heading_head_during_action_distillation "${train_heading_head}")
+  fi
 
   echo "Training ${exptid}"
   mkdir -p "${LEGGED_ROOT}/logs/${PROJ_NAME}/${exptid}"
@@ -250,7 +293,7 @@ run_train() {
       --action_loss_weight 1.0 \
       --latent_loss_weight "${latent_weight}" \
       --freeze_backbone_during_action_distillation "${freeze_backbone}" \
-      --train_heading_head_during_action_distillation "${train_heading_head}" \
+      "${train_heading_head_args[@]}" \
       --teacher_checkpoint_path "${TEACHER_CHECKPOINT_PATH}" \
       --curriculum True \
       --task_targeted_curriculum False \
