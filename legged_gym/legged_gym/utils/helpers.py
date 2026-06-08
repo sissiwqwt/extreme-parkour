@@ -191,6 +191,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.depth_encoder.latent_loss_weight = args.latent_loss_weight
         if args.freeze_backbone_during_action_distillation is not None:
             cfg_train.depth_encoder.freeze_backbone_during_action_distillation = args.freeze_backbone_during_action_distillation
+        if args.train_heading_head_during_action_distillation is not None:
+            cfg_train.depth_encoder.train_heading_head_during_action_distillation = args.train_heading_head_during_action_distillation
         if args.max_iterations is not None:
             cfg_train.runner.max_iterations = args.max_iterations
         if args.resume:
@@ -243,6 +245,7 @@ def get_args():
         {"name": "--action_loss_weight", "type": float, "help": "teacher action distillation loss weight for depth distillation"},
         {"name": "--latent_loss_weight", "type": float, "help": "scan latent alignment loss weight for depth distillation"},
         {"name": "--freeze_backbone_during_action_distillation", "type": parse_bool, "default": None, "help": "Freeze shared visual backbone during action distillation. Example: --freeze_backbone_during_action_distillation False"},
+        {"name": "--train_heading_head_during_action_distillation", "type": parse_bool, "default": None, "help": "Keep the heading predictor head trainable during action distillation. Example: --train_heading_head_during_action_distillation True"},
 
         {"name": "--mask_obs", "action": "store_true", "default": False, "help": "Mask observation when playing"},
         {"name": "--use_jit", "action": "store_true", "default": False, "help": "Load jit script when playing"},

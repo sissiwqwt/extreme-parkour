@@ -131,8 +131,19 @@ class PPO:
             self.action_loss_weight = depth_encoder_paras.get("action_loss_weight", 1.0)
             self.latent_loss_weight = depth_encoder_paras.get("latent_loss_weight", 1.0)
             self.freeze_backbone_during_action_distillation = depth_encoder_paras.get("freeze_backbone_during_action_distillation", False)
+            self.train_heading_head_during_action_distillation = depth_encoder_paras.get("train_heading_head_during_action_distillation", False)
             self.depth_actor = depth_actor
             if self.enable_heading_model:
+                action_distill_params = [
+                    *self.depth_actor.parameters(),
+                    *self.depth_encoder.action_parameters(
+                        include_backbone=not self.freeze_backbone_during_action_distillation,
+                    ),
+                ]
+                if self.train_heading_head_during_action_distillation:
+                    action_distill_params.extend(
+                        self.depth_encoder.heading_parameters(include_backbone=False)
+                    )
                 self.depth_encoder_optimizer = optim.Adam(
                     [
                         *self.depth_encoder.heading_parameters(include_backbone=True),
@@ -141,12 +152,7 @@ class PPO:
                     lr=depth_encoder_paras["learning_rate"],
                 )
                 self.depth_actor_optimizer = optim.Adam(
-                    [
-                        *self.depth_actor.parameters(),
-                        *self.depth_encoder.action_parameters(
-                            include_backbone=not self.freeze_backbone_during_action_distillation,
-                        ),
-                    ],
+                    action_distill_params,
                     lr=depth_encoder_paras["learning_rate"],
                 )
             else:
@@ -356,6 +362,8 @@ class PPO:
 
             if self.enable_heading_model:
                 loss = self.action_loss_weight * depth_actor_loss + self.latent_loss_weight * latent_loss
+                if self.train_heading_head_during_action_distillation:
+                    loss = loss + self.heading_loss_weight * yaw_loss
             else:
                 loss = self.action_loss_weight * depth_actor_loss + self.heading_loss_weight * yaw_loss + self.latent_loss_weight * latent_loss
 
@@ -399,7 +407,9 @@ class PPO:
             for param in self.depth_actor.parameters():
                 param.requires_grad = False
         else:
-            self.depth_encoder.set_heading_trainable(False)
+            self.depth_encoder.set_heading_trainable(False, include_backbone=True)
+            if self.train_heading_head_during_action_distillation:
+                self.depth_encoder.set_heading_trainable(True, include_backbone=False)
             self.depth_encoder.set_action_trainable(
                 True,
                 include_backbone=not self.freeze_backbone_during_action_distillation,

@@ -62,7 +62,7 @@ Default ablations:
 Optional environment variables:
   REFERENCE_EXPTID=${REFERENCE_EXPTID}
   INCLUDE_REFERENCE=${INCLUDE_REFERENCE}
-  EXPERIMENT_SPECS='exptid|pretrain_iters|latent_weight|freeze_backbone;...'
+  EXPERIMENT_SPECS='exptid|pretrain_iters|latent_weight|freeze_backbone|train_heading_head;...'
   RUN_MODE=${RUN_MODE}
   MAX_ITERATIONS=${MAX_ITERATIONS}
   EVAL_EPISODES=${EVAL_EPISODES}
@@ -231,6 +231,7 @@ run_train() {
   local pretrain_iters="$2"
   local latent_weight="$3"
   local freeze_backbone="$4"
+  local train_heading_head="${5:-False}"
 
   echo "Training ${exptid}"
   mkdir -p "${LEGGED_ROOT}/logs/${PROJ_NAME}/${exptid}"
@@ -249,6 +250,7 @@ run_train() {
       --action_loss_weight 1.0 \
       --latent_loss_weight "${latent_weight}" \
       --freeze_backbone_during_action_distillation "${freeze_backbone}" \
+      --train_heading_head_during_action_distillation "${train_heading_head}" \
       --teacher_checkpoint_path "${TEACHER_CHECKPOINT_PATH}" \
       --curriculum True \
       --task_targeted_curriculum False \
@@ -414,8 +416,8 @@ main() {
   IFS=";" read -r -a specs <<<"${EXPERIMENT_SPECS}"
   for spec in "${specs[@]}"; do
     [[ -n "${spec}" ]] || continue
-    IFS="|" read -r exptid pretrain_iters latent_weight freeze_backbone <<<"${spec}"
-    run_train "${exptid}" "${pretrain_iters}" "${latent_weight}" "${freeze_backbone}"
+    IFS="|" read -r exptid pretrain_iters latent_weight freeze_backbone train_heading_head <<<"${spec}"
+    run_train "${exptid}" "${pretrain_iters}" "${latent_weight}" "${freeze_backbone}" "${train_heading_head:-False}"
     if [[ "${RUN_MODE}" == "train-upload" || "${RUN_MODE}" == "train-eval-upload" ]]; then
       upload_checkpoint "${exptid}"
     fi

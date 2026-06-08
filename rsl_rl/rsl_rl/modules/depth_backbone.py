@@ -85,9 +85,10 @@ class RecurrentDepthBackbone(nn.Module):
         for module in modules:
             yield from module.parameters()
 
-    def set_heading_trainable(self, trainable):
-        for param in self.visual_backbone.parameters():
-            param.requires_grad = trainable
+    def set_heading_trainable(self, trainable, include_backbone=True):
+        if include_backbone:
+            for param in self.visual_backbone.parameters():
+                param.requires_grad = trainable
         for param in self.heading_predictor_head.parameters():
             param.requires_grad = trainable
 
