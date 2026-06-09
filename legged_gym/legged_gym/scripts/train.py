@@ -30,6 +30,7 @@
 
 import numpy as np
 import os
+import json
 from datetime import datetime
 
 import isaacgym
@@ -38,6 +39,47 @@ from legged_gym.utils import get_args, task_registry
 from shutil import copyfile
 import torch
 import wandb
+
+
+def _terrain_summary_dict(env_cfg):
+    terrain_cfg = getattr(env_cfg, "terrain", None)
+    if terrain_cfg is None:
+        return None
+
+    terrain_dict = dict(getattr(terrain_cfg, "terrain_dict", {}) or {})
+    active_terrains = {
+        name: weight for name, weight in terrain_dict.items()
+        if float(weight) > 0.0
+    }
+
+    return {
+        "active_terrains": active_terrains,
+        "curriculum": bool(getattr(terrain_cfg, "curriculum", False)),
+        "difficulty_formula": "terrain_level / (num_rows - 1)",
+        "difficulty_range": [0.0, 1.0],
+        "max_init_terrain_level": int(getattr(terrain_cfg, "max_init_terrain_level", 0)),
+        "num_cols": int(getattr(terrain_cfg, "num_cols", len(terrain_dict))),
+        "num_rows": int(getattr(terrain_cfg, "num_rows", 0)),
+        "terrain_dict": terrain_dict,
+    }
+
+
+def _write_terrain_summary(log_dir, env_cfg):
+    summary = _terrain_summary_dict(env_cfg)
+    if summary is None:
+        return
+
+    json_path = os.path.join(log_dir, "terrain_summary.json")
+    jsonl_path = os.path.join(log_dir, "terrain_summary.jsonl")
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+    with open(jsonl_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(summary, sort_keys=True))
+        f.write("\n")
+
 
 def train(args):
     args.headless = True
@@ -61,6 +103,7 @@ def train(args):
     wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
 
     env, env_cfg = task_registry.make_env(name=args.task, args=args)
+    _write_terrain_summary(log_pth, env_cfg)
     ppo_runner, train_cfg = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args)
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, init_at_random_ep_len=True)
 

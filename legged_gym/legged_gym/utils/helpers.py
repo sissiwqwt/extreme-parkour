@@ -68,13 +68,22 @@ def set_seed(seed):
     if seed == -1:
         seed = np.random.randint(0, 10000)
     print("Setting seed: {}".format(seed))
-    
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+def parse_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in ("true", "1", "yes", "y"):
+        return True
+    if value in ("false", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Expected a boolean value.")
 
 def parse_sim_params(args, cfg):
     # code from Isaac Gym Preview 2

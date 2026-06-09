@@ -33,6 +33,45 @@ from torch.nn.modules.activation import ReLU
 from torch.nn.modules.pooling import MaxPool2d
 from .base_config import BaseConfig
 import torch.nn as nn
+
+DEFAULT_TERRAIN_DICT = {
+    "smooth slope": 0.0,
+    "rough slope up": 0.0,
+    "rough slope down": 0.0,
+    "rough stairs up": 0.0,
+    "rough stairs down": 0.0,
+    "discrete": 0.0,
+    "stepping stones": 0.0,
+    "gaps": 0.0,
+    "smooth flat": 0.0,
+    "pit": 0.0,
+    "wall": 0.0,
+    "platform": 0.0,
+    "large stairs up": 0.0,
+    "large stairs down": 0.0,
+    "parkour": 0.15,
+    "parkour_hurdle": 0.1,
+    "parkour_flat": 0.1,
+    "parkour_step": 0.1,
+    "parkour_gap": 0.1,
+    "alternating_step": 0.0,
+    "beam_gap": 0.1,
+    "asymmetric_gap": 0.1,
+    "parkour_v2": 0.15,
+    "narrow_gap": 0.1,
+    "climbing_wall": 0.1,
+    "demo": 0.0,
+}
+
+CAMERA_TERRAIN_DICT = {
+    "parkour": 0.2,
+    "parkour_hurdle": 0.2,
+    "parkour_flat": 0.05,
+    "parkour_step": 0.2,
+    "parkour_gap": 0.2,
+    "demo": 0.15,
+}
+
 class LeggedRobotCfg(BaseConfig):
     class play:
         load_student_config = False
@@ -169,27 +208,8 @@ class LeggedRobotCfg(BaseConfig):
         terrain_width = 4
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 40 # number of terrain cols (types)
-        
-        terrain_dict = {"smooth slope": 0., 
-                        "rough slope up": 0.0,
-                        "rough slope down": 0.0,
-                        "rough stairs up": 0., 
-                        "rough stairs down": 0., 
-                        "discrete": 0., 
-                        "stepping stones": 0.0,
-                        "gaps": 0., 
-                        "smooth flat": 0,
-                        "pit": 0.0,
-                        "wall": 0.0,
-                        "platform": 0.,
-                        "large stairs up": 0.,
-                        "large stairs down": 0.,
-                        "parkour": 0.2,
-                        "parkour_hurdle": 0.2,
-                        "parkour_flat": 0.2,
-                        "parkour_step": 0.2,
-                        "parkour_gap": 0.2,
-                        "demo": 0.0,}
+
+        terrain_dict = DEFAULT_TERRAIN_DICT.copy()
         terrain_proportions = list(terrain_dict.values())
         
         # trimesh only:
@@ -286,7 +306,7 @@ class LeggedRobotCfg(BaseConfig):
         delay_update_global_steps = 24 * 8000
         action_delay = False
         action_curr_step = [1, 1]
-        action_curr_step_scratch = [0, 1]
+        action_curr_step_scratch = [1]
         action_delay_view = 1
         action_buf_len = 8
         
