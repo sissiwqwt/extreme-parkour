@@ -47,6 +47,7 @@ from legged_gym.envs.base.base_task import BaseTask
 from legged_gym.utils.terrain_ver2 import Terrain
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
+from legged_gym.utils.task_targeted_curriculum import update_task_targeted_curriculum
 from scipy.spatial.transform import Rotation as R
 from .legged_robot_config import LeggedRobotCfg
 
@@ -206,16 +207,21 @@ class LeggedRobot(BaseTask):
 
     def _update_goals(self):
         next_flag = self.reach_goal_timer > self.cfg.env.reach_goal_delay / self.dt
+        self.goal_reached_buf[:] = next_flag
         self.cur_goal_idx[next_flag] += 1
         self.reach_goal_timer[next_flag] = 0
 
         self.reached_goal_ids = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1) < self.cfg.env.next_goal_threshold
         self.reach_goal_timer[self.reached_goal_ids] += 1
 
+        self._refresh_goal_targets()
+
+    def _refresh_goal_targets(self):
         self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
         self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
 
         norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
+        self.target_goal_dist = norm.squeeze(-1)
         target_vec_norm = self.target_pos_rel / (norm + 1e-5)
         self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
 
@@ -261,6 +267,8 @@ class LeggedRobot(BaseTask):
 
         self.cur_goals = self._gather_cur_goals()
         self.next_goals = self._gather_cur_goals(future=1)
+        self._refresh_goal_targets()
+        self.last_goal_dist[:] = self.target_goal_dist
 
         self.update_depth_buffer()
 
@@ -682,6 +690,38 @@ class LeggedRobot(BaseTask):
         move_up =dis_to_origin > 0.8*threshold
         move_down = dis_to_origin < 0.4*threshold
 
+        if self._use_task_targeted_curriculum():
+            failed_timeout = self.time_out_buf[env_ids] & (self.cur_goal_idx[env_ids] < self.cfg.terrain.num_goals)
+            decisive = move_up | move_down | failed_timeout
+            if torch.any(decisive):
+                task_ids = self.terrain_types[env_ids][decisive]
+                successes = move_up[decisive] & ~failed_timeout[decisive]
+                self.task_targeted_success_rates, self.task_targeted_updated_tasks = update_task_targeted_curriculum(
+                    task_ids=task_ids,
+                    successes=successes,
+                    success_buf=self.task_targeted_success_buf,
+                    counts=self.task_targeted_counts,
+                    update_counts=self.task_targeted_update_counts,
+                    write_idx=self.task_targeted_write_idx,
+                    levels=self.task_targeted_levels,
+                    window=self.task_targeted_window,
+                    min_samples=self.task_targeted_min_samples,
+                    up_threshold=self.task_targeted_up_threshold,
+                    down_threshold=self.task_targeted_down_threshold,
+                    max_level=self.max_terrain_level,
+                )
+
+            self.terrain_levels[env_ids] = self.task_targeted_levels[self.terrain_types[env_ids]]
+            self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+            self.env_class[env_ids] = self.terrain_class[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+
+            temp = self.terrain_goals[self.terrain_levels, self.terrain_types]
+            last_col = temp[:, -1].unsqueeze(1)
+            self.env_goals[:] = torch.cat((temp, last_col.repeat(1, self.cfg.env.num_future_goal_obs, 1)), dim=1)[:]
+            self.cur_goals = self._gather_cur_goals()
+            self.next_goals = self._gather_cur_goals(future=1)
+            return
+
         self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
         # # Robots that solve the last level are sent to a random one
         self.terrain_levels[env_ids] = torch.where(self.terrain_levels[env_ids]>=self.max_terrain_level,
@@ -738,6 +778,9 @@ class LeggedRobot(BaseTask):
         self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
 
         self.reach_goal_timer = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.goal_reached_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
+        self.target_goal_dist = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_goal_dist = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
 
         str_rng = self.cfg.domain_rand.motor_strength_range
         self.motor_strength = (str_rng[1] - str_rng[0]) * torch.rand(2, self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) + str_rng[0]
@@ -754,6 +797,9 @@ class LeggedRobot(BaseTask):
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
         self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
+        if hasattr(self, "cur_goals") and hasattr(self, "next_goals"):
+            self._refresh_goal_targets()
+            self.last_goal_dist[:] = self.target_goal_dist
         if self.cfg.terrain.measure_heights:
             self.height_points = self._init_height_points()
         self.measured_heights = 0
@@ -1025,6 +1071,9 @@ class LeggedRobot(BaseTask):
             self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
             self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
             self.max_terrain_level = self.cfg.terrain.num_rows
+            if self._use_task_targeted_curriculum():
+                self._init_task_targeted_curriculum(max_init_level)
+                self.terrain_levels[:] = self.task_targeted_levels[self.terrain_types]
             self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
             self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
             
@@ -1051,6 +1100,54 @@ class LeggedRobot(BaseTask):
             self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
             self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
             self.env_origins[:, 2] = 0.
+
+    def _use_task_targeted_curriculum(self):
+        return bool(self._task_targeted_cfg("enabled", getattr(self.cfg.terrain, "task_targeted_curriculum", False)))
+
+    def _task_targeted_cfg(self, name, default):
+        section_names = ("task_targeted", "task_targeted_curriculum_cfg", "task_targeted_curriculum")
+        for section_name in section_names:
+            section = getattr(self.cfg.terrain, section_name, None)
+            if section is not None and not isinstance(section, bool) and hasattr(section, name):
+                return getattr(section, name)
+
+        prefixed_name = f"task_targeted_curriculum_{name}"
+        if hasattr(self.cfg.terrain, prefixed_name):
+            return getattr(self.cfg.terrain, prefixed_name)
+        if hasattr(self.cfg.terrain, name):
+            return getattr(self.cfg.terrain, name)
+        return default
+
+    def _init_task_targeted_curriculum(self, max_init_level):
+        num_tasks = int(self.cfg.terrain.num_cols)
+        self.task_targeted_window = int(self._task_targeted_cfg("window", 100))
+        self.task_targeted_min_samples = int(self._task_targeted_cfg("min_samples", 50))
+        self.task_targeted_up_threshold = float(self._task_targeted_cfg("up_threshold", 0.8))
+        self.task_targeted_down_threshold = float(self._task_targeted_cfg("down_threshold", 0.4))
+        if self.task_targeted_window <= 0:
+            raise ValueError("task-targeted curriculum window must be positive")
+        if self.task_targeted_min_samples <= 0:
+            raise ValueError("task-targeted curriculum min_samples must be positive")
+
+        max_init_level = int(min(max_init_level, self.max_terrain_level - 1))
+        self.task_targeted_levels = torch.randint(
+            0,
+            max_init_level + 1,
+            (num_tasks,),
+            device=self.device,
+            dtype=torch.long,
+        )
+        self.task_targeted_success_buf = torch.zeros(
+            num_tasks,
+            self.task_targeted_window,
+            device=self.device,
+            dtype=torch.float,
+        )
+        self.task_targeted_counts = torch.zeros(num_tasks, device=self.device, dtype=torch.long)
+        self.task_targeted_update_counts = torch.zeros(num_tasks, device=self.device, dtype=torch.long)
+        self.task_targeted_write_idx = torch.zeros(num_tasks, device=self.device, dtype=torch.long)
+        self.task_targeted_success_rates = torch.zeros(num_tasks, device=self.device, dtype=torch.float)
+        self.task_targeted_updated_tasks = torch.zeros(num_tasks, device=self.device, dtype=torch.bool)
 
     def _parse_cfg(self, cfg):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
@@ -1234,6 +1331,13 @@ class LeggedRobot(BaseTask):
     def _reward_tracking_yaw(self):
         rew = torch.exp(-torch.abs(self.target_yaw - self.yaw))
         return rew
+
+    def _reward_goal_progress(self):
+        progress = self.last_goal_dist - self.target_goal_dist
+        return torch.clamp(progress, min=-0.05, max=0.2)
+
+    def _reward_goal_reached(self):
+        return self.goal_reached_buf.float()
     
     def _reward_lin_vel_z(self):
         rew = torch.square(self.base_lin_vel[:, 2])

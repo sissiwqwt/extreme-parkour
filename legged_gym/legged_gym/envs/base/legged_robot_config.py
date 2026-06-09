@@ -150,6 +150,11 @@ class LeggedRobotCfg(BaseConfig):
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
         curriculum = True
+        task_targeted_curriculum = True
+        task_targeted_curriculum_window = 80
+        task_targeted_curriculum_min_samples = 20
+        task_targeted_curriculum_up_threshold = 0.85
+        task_targeted_curriculum_down_threshold = 0.45
 
         all_vertical = False
         no_flat = True
@@ -164,7 +169,7 @@ class LeggedRobotCfg(BaseConfig):
 
         selected = False # select a unique terrain type and pass all arguments
         terrain_kwargs = None # Dict of arguments for selected terrain
-        max_init_terrain_level = 5 # starting curriculum state
+        max_init_terrain_level = 2 # starting curriculum state
         terrain_length = 18.
         terrain_width = 4
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
@@ -185,7 +190,7 @@ class LeggedRobotCfg(BaseConfig):
                         "large stairs up": 0.,
                         "large stairs down": 0.,
                         "parkour": 0.15,
-                        "parkour_hurdle": 0.1,
+                        "parkour_hurdle": 0.15,
                         "parkour_flat": 0.05,
                         "parkour_step": 0.1,
                         "parkour_gap": 0.1,
@@ -194,7 +199,7 @@ class LeggedRobotCfg(BaseConfig):
                         "asymmetric_gap": 0.1,
                         "parkour_v2": 0.15,
                         "narrow_gap": 0.1,
-                        "climbing_wall": 0.1,
+                        "climbing_wall": 0.25,
                         "demo": 0.15,}
         terrain_proportions = list(terrain_dict.values())
         
@@ -301,6 +306,8 @@ class LeggedRobotCfg(BaseConfig):
             # tracking rewards
             tracking_goal_vel = 1.5
             tracking_yaw = 0.5
+            goal_progress = 3.0
+            goal_reached = 2.0
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05

@@ -83,7 +83,7 @@ def _asymmetric_gap_params(difficulty):
     difficulty = _difficulty(difficulty)
     return {
         "gap_size": 0.2 + 0.2 * difficulty,
-        "x_range": [1.0, 1.6],
+        "x_range": [1.1, 1.6],
         "corridor_half_width": 0.6 - 0.1 * difficulty,
         "lateral_offset": 0.25 + 0.35 * difficulty,
         "gap_depth": [2.0, 2.5],
@@ -199,15 +199,22 @@ class Terrain:
             self.add_terrain_to_map(terrain, i, j)
         
     def curiculum(self, random=False, max_difficulty=False):
+        difficulty_range = getattr(self.cfg, "difficulty_range", None)
+        if difficulty_range is not None:
+            difficulty_min, difficulty_max = difficulty_range
+        elif max_difficulty:
+            difficulty_min, difficulty_max = 0.7, 1.0
+        else:
+            difficulty_min, difficulty_max = 0.0, 1.0
+
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
                 difficulty = i / (self.cfg.num_rows-1)
                 choice = j / self.cfg.num_cols + 0.001
                 if random:
-                    if max_difficulty:
-                        terrain = self.make_terrain(choice, np.random.uniform(0.7, 1))
-                    else:
-                        terrain = self.make_terrain(choice, np.random.uniform(0, 1))
+                    terrain = self.make_terrain(
+                        choice, np.random.uniform(difficulty_min, difficulty_max)
+                    )
                 else:
                     terrain = self.make_terrain(choice, difficulty)
 
@@ -2290,3 +2297,4 @@ def convert_heightfield_to_trimesh(height_field_raw, horizontal_scale, vertical_
         triangles[start+1:stop:2, 2] = ind3
 
     return vertices, triangles, move_x != 0
+ 
