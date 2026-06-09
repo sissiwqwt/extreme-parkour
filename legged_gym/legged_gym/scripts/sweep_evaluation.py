@@ -8,18 +8,16 @@ Default target:
         heading_pre0_latent1_unfreeze
 
 Example:
-    python sweep_evaluation.py --start-step 8000 --repeats 3
+    python sweep_evaluation.py --repeats 3
 
 Cross-project example:
     python sweep_evaluation.py \
-        --experiment parkour_heading:heading_pre1000_latent1_unfreeze \
-        --experiment another_project:another_run
+        --experiments "{parkour_heading,heading_pre1000_latent1_unfreeze},{another_project,another_run}"
 """
 
 import argparse
 import csv
 import json
-import os
 import re
 import subprocess
 import sys
@@ -61,6 +59,13 @@ def safe_name(value):
 
 
 def parse_experiment(value, default_proj_name):
+    value = value.strip()
+    if value.startswith("{") and value.endswith("}"):
+        parts = [part.strip() for part in value[1:-1].split(",", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise argparse.ArgumentTypeError("Braced experiment must be {PROJ_NAME,EXPTID}.")
+        return Experiment(parts[0], parts[1])
+
     if ":" in value:
         proj_name, exptid = value.split(":", 1)
     elif "/" in value:
@@ -76,6 +81,50 @@ def parse_experiment(value, default_proj_name):
     return Experiment(proj_name, exptid)
 
 
+def parse_experiment_list(value, default_proj_name):
+    value = value.strip()
+    if not value:
+        return []
+
+    if "{" not in value:
+        return [parse_experiment(part, default_proj_name) for part in value.split(",") if part.strip()]
+
+    experiments = []
+    pos = 0
+    for match in re.finditer(r"\{([^{}]+)\}", value):
+        if value[pos:match.start()].strip(" ,"):
+            raise argparse.ArgumentTypeError(
+                "Experiment list must use {PROJ_NAME,EXPTID},{PROJ_NAME,EXPTID}."
+            )
+        experiments.append(parse_experiment(match.group(0), default_proj_name))
+        pos = match.end()
+    if value[pos:].strip(" ,"):
+        raise argparse.ArgumentTypeError(
+            "Experiment list must use {PROJ_NAME,EXPTID},{PROJ_NAME,EXPTID}."
+        )
+    return experiments
+
+
+def resolve_experiments(args):
+    raw_values = []
+    raw_values.extend(args.experiment)
+    if args.experiments:
+        raw_values.append(args.experiments)
+
+    if not raw_values:
+        return [Experiment(args.proj_name, exptid) for exptid in DEFAULT_EXPTIDS]
+
+    experiments = []
+    seen = set()
+    for value in raw_values:
+        for exp in parse_experiment_list(value, args.proj_name):
+            key = (exp.proj_name, exp.exptid)
+            if key not in seen:
+                experiments.append(exp)
+                seen.add(key)
+    return experiments
+
+
 def script_dir():
     return Path(__file__).resolve().parent
 
@@ -84,7 +133,7 @@ def legged_root():
     return script_dir().parents[1]
 
 
-def checkpoint_steps(log_dir, start_step, preferred_interval, fallback_interval):
+def checkpoint_steps(log_dir, start_step):
     if not log_dir.is_dir():
         return []
 
@@ -95,11 +144,7 @@ def checkpoint_steps(log_dir, start_step, preferred_interval, fallback_interval)
             step = int(match.group(1))
             if step >= start_step:
                 steps.append(step)
-    steps = sorted(set(steps))
-    preferred = [step for step in steps if step % preferred_interval == 0]
-    if preferred:
-        return preferred
-    return [step for step in steps if step % fallback_interval == 0]
+    return sorted(set(steps))
 
 
 def latest_json(output_dir):
@@ -266,12 +311,18 @@ def build_parser():
         "--experiment",
         action="append",
         default=[],
-        help="Experiment as EXPTID, PROJ_NAME:EXPTID, or PROJ_NAME/EXPTID. Repeatable.",
+        help=(
+            "Experiment as EXPTID, PROJ_NAME:EXPTID, PROJ_NAME/EXPTID, or "
+            "{PROJ_NAME,EXPTID}. Repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--experiments",
+        default=None,
+        help='Comma-separated experiment list, e.g. "{proj1,expt1},{proj2,expt2}".',
     )
     parser.add_argument("--proj-name", default=DEFAULT_PROJ_NAME, help="Default project for bare EXPTID values.")
-    parser.add_argument("--start-step", type=int, default=8000)
-    parser.add_argument("--preferred-interval", type=int, default=500)
-    parser.add_argument("--fallback-interval", type=int, default=1000)
+    parser.add_argument("--start-step", type=int, default=0, help="Evaluate checkpoints with step >= this value.")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--seed-base", type=int, default=1000)
     parser.add_argument("--python-bin", default=sys.executable or "python")
@@ -302,11 +353,12 @@ def main():
     parser = build_parser()
     args, extra_eval_args = parser.parse_known_args()
 
-    experiments = (
-        [parse_experiment(value, args.proj_name) for value in args.experiment]
-        if args.experiment
-        else [Experiment(args.proj_name, exptid) for exptid in DEFAULT_EXPTIDS]
-    )
+    if args.repeats < 1:
+        parser.error("--repeats must be >= 1")
+    if args.start_step < 0:
+        parser.error("--start-step must be >= 0")
+
+    experiments = resolve_experiments(args)
     run_root = Path(args.output_root) if args.output_root else (
         legged_root() / "logs" / "sweep_evaluation" / datetime.now().strftime("%Y%m%d_%H%M%S")
     )
@@ -316,7 +368,7 @@ def main():
     skipped = []
     for exp in experiments:
         log_dir = legged_root() / "logs" / exp.proj_name / exp.exptid
-        steps = checkpoint_steps(log_dir, args.start_step, args.preferred_interval, args.fallback_interval)
+        steps = checkpoint_steps(log_dir, args.start_step)
         if not steps:
             skipped.append(
                 {
@@ -356,8 +408,6 @@ def main():
         "metrics": metrics,
         "repeats": args.repeats,
         "start_step": args.start_step,
-        "preferred_interval": args.preferred_interval,
-        "fallback_interval": args.fallback_interval,
         "num_completed_runs": len(rows),
         "num_summary_rows": len(summary_rows),
         "skipped": skipped,
