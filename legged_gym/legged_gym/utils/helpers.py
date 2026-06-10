@@ -31,11 +31,11 @@
 import os
 import copy
 import json
+from isaacgym import gymapi
+from isaacgym import gymutil
 import torch
 import numpy as np
 import random
-from isaacgym import gymapi
-from isaacgym import gymutil
 import argparse
 from legged_gym import LEGGED_GYM_ROOT_DIR, LEGGED_GYM_ENVS_DIR
 
@@ -273,6 +273,17 @@ def build_terrain_summary(terrain_cfg):
     }
     num_rows = int(getattr(terrain_cfg, "num_rows"))
     denominator = max(num_rows - 1, 1)
+    task_targeted_cfg = getattr(terrain_cfg, "task_targeted", None)
+    if task_targeted_cfg is None:
+        task_targeted_cfg = getattr(terrain_cfg, "task_targeted_curriculum_cfg", None)
+    if task_targeted_cfg is None:
+        task_targeted_curriculum = getattr(terrain_cfg, "task_targeted_curriculum", None)
+        if task_targeted_curriculum is not None and not isinstance(task_targeted_curriculum, bool):
+            task_targeted_cfg = task_targeted_curriculum
+    if task_targeted_cfg is not None and not isinstance(task_targeted_cfg, bool):
+        task_targeted_enabled = bool(getattr(task_targeted_cfg, "enabled", False))
+    else:
+        task_targeted_enabled = bool(getattr(terrain_cfg, "task_targeted_curriculum", False))
 
     return {
         "active_terrains": active_terrains,
@@ -282,7 +293,7 @@ def build_terrain_summary(terrain_cfg):
         "max_init_terrain_level": int(getattr(terrain_cfg, "max_init_terrain_level", 0)),
         "num_cols": int(getattr(terrain_cfg, "num_cols")),
         "num_rows": num_rows,
-        "task_targeted_curriculum": bool(getattr(terrain_cfg, "task_targeted_curriculum", False)),
+        "task_targeted_curriculum": task_targeted_enabled,
         "terrain_dict": terrain_dict,
     }
 

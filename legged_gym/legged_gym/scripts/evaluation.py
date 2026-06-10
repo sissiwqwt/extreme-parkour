@@ -146,6 +146,8 @@ def _pop_eval_argv():
     parser.add_argument("--randomize_friction", type=parse_bool, default=True)
     parser.add_argument("--add_noise", type=parse_bool, default=True)
     parser.add_argument("--max_difficulty", type=parse_bool, default=True)
+    parser.add_argument("--difficulty_min", type=float, default=0.7)
+    parser.add_argument("--difficulty_max", type=float, default=1.0)
     parser.add_argument(
         "--policy_type",
         choices=("auto", "base", "depth"),
@@ -163,6 +165,29 @@ def _safe_filename(value):
 
 def _checkpoint_label(args):
     return "latest" if args.checkpoint is None or args.checkpoint == -1 else str(args.checkpoint)
+
+
+def _terrain_label(eval_cfg):
+    if eval_cfg.terrain_names:
+        names = [name.strip() for name in eval_cfg.terrain_names.split(",") if name.strip()]
+        return "terrains_" + "_".join(_safe_filename(name) for name in names)
+    return eval_cfg.terrain_set
+
+
+def _validate_difficulty_range(eval_cfg):
+    difficulty_min = float(eval_cfg.difficulty_min)
+    difficulty_max = float(eval_cfg.difficulty_max)
+    if difficulty_min < 0.0 or difficulty_max > 1.0:
+        raise ValueError(
+            f"Difficulty range must stay within [0, 1], got "
+            f"[{difficulty_min}, {difficulty_max}]."
+        )
+    if difficulty_min > difficulty_max:
+        raise ValueError(
+            f"--difficulty_min must be <= --difficulty_max, got "
+            f"{difficulty_min} > {difficulty_max}."
+        )
+    return difficulty_min, difficulty_max
 
 
 def _zeroed_terrain_dict(env_cfg):
@@ -264,8 +289,10 @@ def _configure_eval_env(env_cfg, eval_cfg):
     env_cfg.terrain.num_rows = 5
     env_cfg.terrain.height = [0.02, 0.02]
     env_cfg.terrain.curriculum = False
-    # Evaluation always samples terrain difficulty from [0.7, 1.0].
+    env_cfg.terrain.task_targeted_curriculum = False
+    difficulty_min, difficulty_max = _validate_difficulty_range(eval_cfg)
     env_cfg.terrain.max_difficulty = True
+    env_cfg.terrain.difficulty_range = [difficulty_min, difficulty_max]
     env_cfg.depth.angle = [0, 1]
     env_cfg.noise.add_noise = eval_cfg.add_noise
     env_cfg.domain_rand.randomize_friction = eval_cfg.randomize_friction
@@ -445,8 +472,9 @@ def evaluate(args, eval_cfg):
     os.makedirs(output_dir, exist_ok=True)
     basename = (
         f"{_safe_filename(policy_type)}_"
-        f"{_safe_filename(eval_cfg.terrain_set)}_"
-        f"{_safe_filename(checkpoint)}"
+        f"{_safe_filename(_terrain_label(eval_cfg))}_"
+        f"seed{_safe_filename(env_cfg.seed)}_"
+        f"ckpt{_safe_filename(checkpoint)}"
     )
     csv_path = os.path.join(output_dir, basename + ".csv")
     json_path = os.path.join(output_dir, basename + ".json")
@@ -628,7 +656,10 @@ def _summarize(
         "requested_eval_episodes": eval_cfg.eval_episodes,
         "target_eval_episodes": target_eval_episodes,
         "terrain_episode_targets": terrain_episode_targets,
-        "difficulty_sampling_range": [0.7, 1.0],
+        "difficulty_sampling_range": [
+            float(eval_cfg.difficulty_min),
+            float(eval_cfg.difficulty_max),
+        ],
         "success_threshold": eval_cfg.success_threshold,
         "stuck_window_s": eval_cfg.stuck_window_s,
         "stuck_threshold_m": eval_cfg.stuck_threshold_m,
