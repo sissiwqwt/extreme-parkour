@@ -700,10 +700,18 @@ class LeggedRobot(BaseTask):
             elif success_mode == "distance":
                 decisive = move_up | move_down | failed_timeout
                 successes = move_up & ~failed_timeout
+            elif success_mode == "waypoint":
+                waypoint_progress = self.cur_goal_idx[env_ids].float() / max(float(self.cfg.terrain.num_goals), 1.0)
+                up_threshold = float(self._task_targeted_cfg("waypoint_up_threshold", 0.75))
+                down_threshold = float(self._task_targeted_cfg("waypoint_down_threshold", 0.25))
+                waypoint_success = waypoint_progress >= up_threshold
+                waypoint_failure = waypoint_progress <= down_threshold
+                decisive = waypoint_success | waypoint_failure | failed_timeout
+                successes = waypoint_success & ~failed_timeout
             else:
                 raise ValueError(
                     f"Unknown task-targeted curriculum success_mode '{success_mode}'. "
-                    "Expected 'goal' or 'distance'."
+                    "Expected 'goal', 'distance', or 'waypoint'."
                 )
             if torch.any(decisive):
                 task_ids = self._task_targeted_task_ids(self.terrain_types[env_ids][decisive])
@@ -794,6 +802,19 @@ class LeggedRobot(BaseTask):
         self.goal_reached_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device, requires_grad=False)
         self.target_goal_dist = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
         self.last_goal_dist = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
+        terrain_names = list(getattr(self.cfg.terrain, "terrain_dict", {}).keys())
+        stuck_terrain_names = set(getattr(self.cfg.rewards, "stuck_terrain_names", []))
+        stuck_terrain_ids = [
+            terrain_names.index(name)
+            for name in stuck_terrain_names
+            if name in terrain_names
+        ]
+        self.stuck_terrain_ids = torch.tensor(
+            stuck_terrain_ids,
+            dtype=torch.long,
+            device=self.device,
+            requires_grad=False,
+        )
 
         str_rng = self.cfg.domain_rand.motor_strength_range
         self.motor_strength = (str_rng[1] - str_rng[0]) * torch.rand(2, self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) + str_rng[0]
@@ -1418,6 +1439,17 @@ class LeggedRobot(BaseTask):
 
     def _reward_goal_reached(self):
         return self.goal_reached_buf.float()
+
+    def _reward_stuck(self):
+        progress = self.last_goal_dist - self.target_goal_dist
+        low_progress = progress < self.cfg.rewards.stuck_progress_threshold
+        low_speed = self.base_lin_vel[:, 0] < self.cfg.rewards.stuck_speed_threshold
+        past_warmup = self.episode_length_buf * self.dt > self.cfg.rewards.stuck_warmup_s
+        rew = (low_progress & low_speed & past_warmup & ~self.goal_reached_buf).float()
+        if self.stuck_terrain_ids.numel() > 0:
+            terrain_mask = torch.isin(self.env_class.long(), self.stuck_terrain_ids)
+            rew[terrain_mask] *= self.cfg.rewards.stuck_terrain_scale
+        return rew
     
     def _reward_lin_vel_z(self):
         rew = torch.square(self.base_lin_vel[:, 2])
