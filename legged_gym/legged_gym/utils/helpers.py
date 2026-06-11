@@ -175,8 +175,6 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         # alg runner parameters
         if args.use_camera:
             cfg_train.depth_encoder.if_depth = args.use_camera
-        if args.use_action_weight is not None:
-            cfg_train.depth_encoder.action_loss_use_weight = args.use_action_weight
         if args.max_iterations is not None:
             cfg_train.runner.max_iterations = args.max_iterations
         if args.resume:
@@ -220,8 +218,6 @@ def get_args():
         {"name": "--resumeid", "type": str, "help": "exptid"},
         {"name": "--daggerid", "type": str, "help": "name of dagger run"},
         {"name": "--use_camera", "action": "store_true", "default": False, "help": "render camera for distillation"},
-        {"name": "--use_action_weight", "action": "store_true", "default": None, "help": "Enable near-failure weighted student action loss"},
-        {"name": "--no_action_weight", "action": "store_false", "dest": "use_action_weight", "default": None, "help": "Disable near-failure weighted student action loss"},
 
         {"name": "--mask_obs", "action": "store_true", "default": False, "help": "Mask observation when playing"},
         {"name": "--use_jit", "action": "store_true", "default": False, "help": "Load jit script when playing"},

@@ -328,17 +328,12 @@ class PPO:
         actions_teacher_batch,
         yaw_student_batch,
         yaw_teacher_batch,
-        action_weight_batch=None,
         depth_latent_batch=None,
         scandots_latent_batch=None,
     ):
         if self.if_depth:
             action_loss = (actions_teacher_batch.detach() - actions_student_batch).norm(p=2, dim=1)
-            if action_weight_batch is not None:
-                action_weight_batch = action_weight_batch.detach().to(action_loss.device).view(-1)
-                depth_actor_loss = (action_weight_batch * action_loss).mean()
-            else:
-                depth_actor_loss = action_loss.mean()
+            depth_actor_loss = action_loss.mean()
             yaw_loss = (yaw_teacher_batch.detach() - yaw_student_batch).norm(p=2, dim=1).mean()
             if depth_latent_batch is not None and scandots_latent_batch is not None:
                 depth_encoder_loss = (scandots_latent_batch.detach() - depth_latent_batch).norm(p=2, dim=1).mean()
