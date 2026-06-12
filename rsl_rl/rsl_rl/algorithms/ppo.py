@@ -80,6 +80,9 @@ class PPO:
                  device='cpu',
                  dagger_update_freq=20,
                  priv_reg_coef_schedual = [0, 0, 0],
+                 use_next_proprio_aux_loss=True,
+                 next_proprio_aux_coef=0.1,
+                 next_proprio_aux_stop_iter=8000,
                  **kwargs
                  ):
 
@@ -107,6 +110,9 @@ class PPO:
         self.lam = lam
         self.max_grad_norm = max_grad_norm
         self.use_clipped_value_loss = use_clipped_value_loss
+        self.use_next_proprio_aux_loss = use_next_proprio_aux_loss
+        self.next_proprio_aux_coef = next_proprio_aux_coef
+        self.next_proprio_aux_stop_iter = next_proprio_aux_stop_iter
 
         # Adaptation
         self.hist_encoder_optimizer = optim.Adam(self.actor_critic.actor.history_encoder.parameters(), lr=learning_rate)
@@ -160,9 +166,11 @@ class PPO:
 
         return self.transition.actions
     
-    def process_env_step(self, rewards, dones, infos):
+    def process_env_step(self, rewards, dones, infos, next_obs=None, aux_valid_mask=None):
         rewards_total = rewards.clone()
 
+        self.transition.next_observations = next_obs
+        self.transition.aux_valid_mask = aux_valid_mask
         self.transition.rewards = rewards_total.clone()
         self.transition.dones = dones
         # Bootstrapping on time outs
@@ -181,19 +189,21 @@ class PPO:
         self.storage.compute_returns(last_values, self.gamma, self.lam)
     
 
-    def update(self):
+    def update(self, current_learning_iteration=None):
         mean_value_loss = 0
         mean_surrogate_loss = 0
         mean_estimator_loss = 0
         mean_discriminator_loss = 0
         mean_discriminator_acc = 0
         mean_priv_reg_loss = 0
+        mean_next_proprio_aux_loss = 0
+        mean_aux_valid_fraction = 0
         if self.actor_critic.is_recurrent:
             generator = self.storage.reccurent_mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
+            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, next_obs_batch, aux_valid_mask_batch in generator:
 
                 self.actor_critic.act(obs_batch, masks=masks_batch, hidden_states=hid_states_batch[0]) # match distribution dimension
 
@@ -252,10 +262,30 @@ class PPO:
                 else:
                     value_loss = (returns_batch - value_batch).pow(2).mean()
 
+                next_proprio_aux_loss = torch.zeros((), device=self.device)
+                aux_valid_fraction = torch.zeros((), device=self.device)
+                rollout_iteration = self.counter if current_learning_iteration is None else current_learning_iteration
+                if (
+                    next_obs_batch is not None
+                    and aux_valid_mask_batch is not None
+                    and self.use_next_proprio_aux_loss
+                    and self.next_proprio_aux_coef > 0.0
+                    and rollout_iteration < self.next_proprio_aux_stop_iter
+                ):
+                    next_proprio_target = next_obs_batch[:, :self.num_prop]
+                    next_proprio_pred = self.actor_critic.predict_next_proprio(obs_batch, actions_batch)
+                    per_sample_aux_loss = (next_proprio_pred - next_proprio_target).pow(2).mean(dim=-1)
+                    aux_valid_weights = aux_valid_mask_batch.view(-1).float()
+                    aux_valid_fraction = aux_valid_weights.mean()
+                    valid_count = aux_valid_weights.sum()
+                    if valid_count.item() > 0:
+                        next_proprio_aux_loss = (per_sample_aux_loss * aux_valid_weights).sum() / valid_count
+
                 loss = surrogate_loss + \
                        self.value_loss_coef * value_loss - \
                        self.entropy_coef * entropy_batch.mean() + \
-                       priv_reg_coef * priv_reg_loss
+                       priv_reg_coef * priv_reg_loss + \
+                       self.next_proprio_aux_coef * next_proprio_aux_loss
                 # loss = self.teacher_alpha * imitation_loss + (1 - self.teacher_alpha) * loss
 
                 # Gradient step
@@ -268,6 +298,8 @@ class PPO:
                 mean_surrogate_loss += surrogate_loss.item()
                 mean_estimator_loss += estimator_loss.item()
                 mean_priv_reg_loss += priv_reg_loss.item()
+                mean_next_proprio_aux_loss += next_proprio_aux_loss.item()
+                mean_aux_valid_fraction += aux_valid_fraction.item()
                 mean_discriminator_loss += 0
                 mean_discriminator_acc += 0
 
@@ -276,11 +308,13 @@ class PPO:
         mean_surrogate_loss /= num_updates
         mean_estimator_loss /= num_updates
         mean_priv_reg_loss /= num_updates
+        mean_next_proprio_aux_loss /= num_updates
+        mean_aux_valid_fraction /= num_updates
         mean_discriminator_loss /= num_updates
         mean_discriminator_acc /= num_updates
         self.storage.clear()
         self.update_counter()
-        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_discriminator_loss, mean_discriminator_acc, mean_priv_reg_loss, priv_reg_coef
+        return mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_discriminator_loss, mean_discriminator_acc, mean_priv_reg_loss, priv_reg_coef, mean_next_proprio_aux_loss, mean_aux_valid_fraction
 
     def update_dagger(self):
         mean_hist_latent_loss = 0
@@ -289,7 +323,7 @@ class PPO:
         else:
             generator = self.storage.mini_batch_generator(self.num_mini_batches, self.num_learning_epochs)
         for obs_batch, critic_obs_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, old_actions_log_prob_batch, \
-            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch in generator:
+            old_mu_batch, old_sigma_batch, hid_states_batch, masks_batch, next_obs_batch, aux_valid_mask_batch in generator:
                 with torch.inference_mode():
                     self.actor_critic.act(obs_batch, hist_encoding=True, masks=masks_batch, hidden_states=hid_states_batch[0])
 

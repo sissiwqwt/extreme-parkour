@@ -94,7 +94,8 @@ class Actor(nn.Module):
                  priv_encoder_dims, 
                  num_priv_latent, 
                  num_priv_explicit, 
-                 num_hist, activation, 
+                 num_hist, activation,
+                 next_proprio_head_hidden_dims,
                  tanh_encoder_output=False) -> None:
         super().__init__()
         # prop -> scan -> priv_explicit -> priv_latent -> hist
@@ -139,60 +140,58 @@ class Actor(nn.Module):
             self.scan_encoder = nn.Identity()
             self.scan_encoder_output_dim = num_scan
         
-        actor_layers = []
-        actor_layers.append(nn.Linear(num_prop+
-                                      self.scan_encoder_output_dim+
-                                      num_priv_explicit+
-                                      priv_encoder_output_dim, 
-                                      actor_hidden_dims[0]))
-        actor_layers.append(activation)
-        for l in range(len(actor_hidden_dims)):
-            if l == len(actor_hidden_dims) - 1:
-                actor_layers.append(nn.Linear(actor_hidden_dims[l], num_actions))
-            else:
-                actor_layers.append(nn.Linear(actor_hidden_dims[l], actor_hidden_dims[l + 1]))
-                actor_layers.append(activation)
-        if tanh_encoder_output:
-            actor_layers.append(nn.Tanh())
-        self.actor_backbone = nn.Sequential(*actor_layers)
+        actor_input_dim = num_prop + self.scan_encoder_output_dim + num_priv_explicit + priv_encoder_output_dim
+        actor_body_layers = [
+            nn.Linear(actor_input_dim, actor_hidden_dims[0]),
+            activation,
+        ]
+        for l in range(len(actor_hidden_dims) - 1):
+            actor_body_layers.append(nn.Linear(actor_hidden_dims[l], actor_hidden_dims[l + 1]))
+            actor_body_layers.append(activation)
+        self.actor_body = nn.Sequential(*actor_body_layers)
+        self.actor_head = nn.Linear(actor_hidden_dims[-1], num_actions)
+        self.actor_output_activation = nn.Tanh() if tanh_encoder_output else nn.Identity()
+
+        next_proprio_layers = []
+        next_proprio_input_dim = actor_hidden_dims[-1] + num_actions
+        if len(next_proprio_head_hidden_dims) == 0:
+            next_proprio_layers.append(nn.Linear(next_proprio_input_dim, num_prop))
+        else:
+            next_proprio_layers.append(nn.Linear(next_proprio_input_dim, next_proprio_head_hidden_dims[0]))
+            next_proprio_layers.append(activation)
+            for l in range(len(next_proprio_head_hidden_dims) - 1):
+                next_proprio_layers.append(nn.Linear(next_proprio_head_hidden_dims[l], next_proprio_head_hidden_dims[l + 1]))
+                next_proprio_layers.append(activation)
+            next_proprio_layers.append(nn.Linear(next_proprio_head_hidden_dims[-1], num_prop))
+        self.next_proprio_head = nn.Sequential(*next_proprio_layers)
 
     def forward(self, obs, hist_encoding: bool, eval=False, scandots_latent=None):
-        if not eval:
-            if self.if_scan_encode:
-                obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-                if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan)   
-                else:
-                    scan_latent = scandots_latent
-                obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
+        actor_features = self.build_actor_features(obs, hist_encoding, scandots_latent=scandots_latent)
+        actions = self.actor_head(actor_features)
+        return self.actor_output_activation(actions)
+
+    def build_actor_features(self, obs, hist_encoding: bool, scandots_latent=None):
+        if self.if_scan_encode:
+            obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
+            if scandots_latent is None:
+                scan_latent = self.scan_encoder(obs_scan)
             else:
-                obs_prop_scan = obs[:, :self.num_prop + self.num_scan]
-            obs_priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
-            if hist_encoding:
-                latent = self.infer_hist_latent(obs)
-            else:
-                latent = self.infer_priv_latent(obs)
-            backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
-            backbone_output = self.actor_backbone(backbone_input)
-            return backbone_output
+                scan_latent = scandots_latent
+            obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
         else:
-            if self.if_scan_encode:
-                obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
-                if scandots_latent is None:
-                    scan_latent = self.scan_encoder(obs_scan)   
-                else:
-                    scan_latent = scandots_latent
-                obs_prop_scan = torch.cat([obs[:, :self.num_prop], scan_latent], dim=1)
-            else:
-                obs_prop_scan = obs[:, :self.num_prop + self.num_scan]
-            obs_priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
-            if hist_encoding:
-                latent = self.infer_hist_latent(obs)
-            else:
-                latent = self.infer_priv_latent(obs)
-            backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
-            backbone_output = self.actor_backbone(backbone_input)
-            return backbone_output
+            obs_prop_scan = obs[:, :self.num_prop + self.num_scan]
+        obs_priv_explicit = obs[:, self.num_prop + self.num_scan:self.num_prop + self.num_scan + self.num_priv_explicit]
+        if hist_encoding:
+            latent = self.infer_hist_latent(obs)
+        else:
+            latent = self.infer_priv_latent(obs)
+        backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
+        return self.actor_body(backbone_input)
+
+    def predict_next_proprio(self, obs, action, hist_encoding: bool, scandots_latent=None):
+        actor_features = self.build_actor_features(obs, hist_encoding, scandots_latent=scandots_latent)
+        predictor_input = torch.cat([actor_features, action], dim=1)
+        return self.next_proprio_head(predictor_input)
     
     def infer_priv_latent(self, obs):
         priv = obs[:, self.num_prop + self.num_scan + self.num_priv_explicit: self.num_prop + self.num_scan + self.num_priv_explicit + self.num_priv_latent]
@@ -221,15 +220,30 @@ class ActorCriticRMA(nn.Module):
                         activation='elu',
                         init_noise_std=1.0,
                         **kwargs):
+        priv_encoder_dims = kwargs.pop('priv_encoder_dims')
+        tanh_encoder_output = kwargs.pop('tanh_encoder_output')
+        next_proprio_head_hidden_dims = kwargs.pop('next_proprio_head_hidden_dims', [128, 64])
         if kwargs:
             print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
         super(ActorCriticRMA, self).__init__()
 
         self.kwargs = kwargs
-        priv_encoder_dims= kwargs['priv_encoder_dims']
         activation = get_activation(activation)
         
-        self.actor = Actor(num_prop, num_scan, num_actions, scan_encoder_dims, actor_hidden_dims, priv_encoder_dims, num_priv_latent, num_priv_explicit, num_hist, activation, tanh_encoder_output=kwargs['tanh_encoder_output'])
+        self.actor = Actor(
+            num_prop,
+            num_scan,
+            num_actions,
+            scan_encoder_dims,
+            actor_hidden_dims,
+            priv_encoder_dims,
+            num_priv_latent,
+            num_priv_explicit,
+            num_hist,
+            activation,
+            next_proprio_head_hidden_dims,
+            tanh_encoder_output=tanh_encoder_output,
+        )
         
 
         # Value function
@@ -300,6 +314,9 @@ class ActorCriticRMA(nn.Module):
     def evaluate(self, critic_observations, **kwargs):
         value = self.critic(critic_observations)
         return value
+
+    def predict_next_proprio(self, observations, actions, hist_encoding=False, scandots_latent=None, **kwargs):
+        return self.actor.predict_next_proprio(observations, actions, hist_encoding, scandots_latent=scandots_latent)
     
     def reset_std(self, std, num_actions, device):
         new_std = std * torch.ones(num_actions, device=device)

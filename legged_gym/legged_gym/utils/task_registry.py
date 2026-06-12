@@ -144,6 +144,7 @@ class TaskRegistry():
         else:
             log_dir = log_root#os.path.join(log_root, datetime.now().strftime('%b%d_%H-%M-%S') + '_' + train_cfg.runner.run_name)
         
+        load_optimizer = kwargs.pop("load_optimizer", True)
         train_cfg_dict = class_to_dict(train_cfg)
         runner = OnPolicyRunner(env, 
                                 train_cfg_dict, 
@@ -161,7 +162,7 @@ class TaskRegistry():
             print(train_cfg.runner.load_run)
             # load_root = os.path.join(LEGGED_GYM_ROOT_DIR, 'logs', "rough_a1", train_cfg.runner.load_run)
             resume_path = get_load_path(log_root, load_run=train_cfg.runner.load_run, checkpoint=train_cfg.runner.checkpoint)
-            runner.load(resume_path)
+            runner.load(resume_path, load_optimizer=load_optimizer)
             if not train_cfg.policy.continue_from_last_std:
                 runner.alg.actor_critic.reset_std(train_cfg.policy.init_noise_std, 12, device=runner.device)
 

@@ -10,6 +10,7 @@ import csv
 import json
 import os
 import re
+import subprocess
 import sys
 from collections import defaultdict
 
@@ -25,6 +26,7 @@ from legged_gym.utils import get_args, task_registry
 from legged_gym.utils.helpers import (
     class_to_dict,
     parse_bool,
+    parse_device_str,
     parse_sim_params,
     set_seed,
     update_cfg_from_args,
@@ -115,6 +117,11 @@ TERRAIN_ALIASES = {
 
 def _pop_eval_argv():
     parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument(
+        "--auto_gpu",
+        action="store_true",
+        help="Automatically pick the most idle GPU before evaluation starts.",
+    )
     parser.add_argument("--policy_id", type=str, default=None)
     parser.add_argument("--eval_episodes", type=int, default=256)
     parser.add_argument("--eval_max_steps", type=int, default=None)
@@ -155,6 +162,67 @@ def _pop_eval_argv():
     ns, rest = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     return ns
+
+
+def _select_idle_gpu():
+    query = [
+        "nvidia-smi",
+        "--query-gpu=index,memory.used,utilization.gpu",
+        "--format=csv,noheader,nounits",
+    ]
+    try:
+        result = subprocess.run(
+            query,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+        print(f"[WARN] Failed to query GPUs with nvidia-smi: {exc}")
+        return None
+
+    candidates = []
+    for line in result.stdout.strip().splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) != 3:
+            continue
+        try:
+            gpu_id = int(parts[0])
+            memory_used = int(parts[1])
+            utilization = int(parts[2])
+        except ValueError:
+            continue
+        candidates.append((utilization, memory_used, gpu_id))
+
+    if not candidates:
+        print("[WARN] No GPUs were returned by nvidia-smi.")
+        return None
+
+    candidates.sort()
+    _, _, gpu_id = candidates[0]
+    return gpu_id
+
+
+def _apply_auto_gpu(args):
+    if args.device == "cpu":
+        print("[INFO] --auto_gpu ignored because --device cpu was requested.")
+        return args
+
+    gpu_id = _select_idle_gpu()
+    if gpu_id is None:
+        print(f"[INFO] Keeping requested device: {args.device}")
+        return args
+
+    device = f"cuda:{gpu_id}"
+    args.device = device
+    args.rl_device = device
+    args.sim_device = device
+    args.graphics_device_id = gpu_id
+    args.sim_device_type, args.compute_device_id = parse_device_str(device)
+    args.sim_device_id = args.compute_device_id
+    args.use_gpu = True
+    print(f"[INFO] Auto-selected idle GPU: {device}")
+    return args
 
 
 def _safe_filename(value):
@@ -429,6 +497,7 @@ def evaluate(args, eval_cfg):
         train_cfg=train_cfg,
         return_log_dir=True,
         init_wandb=False,
+        load_optimizer=False,
     )
     policy = ppo_runner.get_inference_policy(device=env.device)
     depth_encoder = (
@@ -640,4 +709,6 @@ def _summarize(
 if __name__ == "__main__":
     eval_cli = _pop_eval_argv()
     cli = get_args()
+    if eval_cli.auto_gpu:
+        cli = _apply_auto_gpu(cli)
     evaluate(cli, eval_cli)

@@ -54,7 +54,7 @@ DEFAULT_TERRAIN_DICT = {
     "parkour_flat": 0.1,
     "parkour_step": 0.1,
     "parkour_gap": 0.1,
-    "alternating_step": 0.0,
+    "alternating_step": 0.1,
     "beam_gap": 0.1,
     "asymmetric_gap": 0.1,
     "parkour_v2": 0.15,
@@ -306,7 +306,7 @@ class LeggedRobotCfg(BaseConfig):
         delay_update_global_steps = 24 * 8000
         action_delay = False
         action_curr_step = [1, 1]
-        action_curr_step_scratch = [1]
+        action_curr_step_scratch = [0,1]
         action_delay_view = 1
         action_buf_len = 8
         
@@ -376,6 +376,7 @@ class LeggedRobotCfgPPO(BaseConfig):
         scan_encoder_dims = [128, 64, 32]
         actor_hidden_dims = [512, 256, 128]
         critic_hidden_dims = [512, 256, 128]
+        next_proprio_head_hidden_dims = [128, 64]
         priv_encoder_dims = [64, 20]
         activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
         # only for 'ActorCriticRecurrent':
@@ -403,6 +404,9 @@ class LeggedRobotCfgPPO(BaseConfig):
         dagger_update_freq = 20
         priv_reg_coef_schedual = [0, 0.1, 2000, 3000]
         priv_reg_coef_schedual_resume = [0, 0.1, 0, 1]
+        use_next_proprio_aux_loss = True
+        next_proprio_aux_coef = 0.1
+        next_proprio_aux_stop_iter = 8000
     
     class depth_encoder:
         if_depth = LeggedRobotCfg.depth.use_camera

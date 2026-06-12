@@ -185,6 +185,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.load_run = args.load_run
         if args.checkpoint is not None:
             cfg_train.runner.checkpoint = args.checkpoint
+        if hasattr(args, "use_aux_proprio_loss") and args.use_aux_proprio_loss is not None:
+            cfg_train.algorithm.use_next_proprio_aux_loss = args.use_aux_proprio_loss
 
     return env_cfg, cfg_train
 
@@ -228,7 +230,8 @@ def get_args():
         {"name": "--hitid", "type": str, "default": None, "help": "exptid fot hitting policy"},
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
-        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"}
+        {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
+        {"name": "--use_aux_proprio_loss", "type": parse_bool, "default": True, "help": "Enable the pre-8000 next proprio auxiliary prediction loss during base training."}
 
 
     ]

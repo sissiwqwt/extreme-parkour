@@ -37,8 +37,10 @@ class RolloutStorage:
     class Transition:
         def __init__(self):
             self.observations = None
+            self.next_observations = None
             self.critic_observations = None
             self.actions = None
+            self.aux_valid_mask = None
             self.rewards = None
             self.dones = None
             self.values = None
@@ -59,11 +61,13 @@ class RolloutStorage:
 
         # Core
         self.observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
+        self.next_observations = torch.zeros(num_transitions_per_env, num_envs, *obs_shape, device=self.device)
 
         if privileged_obs_shape[0] is not None:
             self.privileged_observations = torch.zeros(num_transitions_per_env, num_envs, *privileged_obs_shape, device=self.device)
         else:
             self.privileged_observations = None
+        self.aux_valid_mask = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device, dtype=torch.bool)
         self.rewards = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.actions = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.dones = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device).byte()
@@ -89,8 +93,10 @@ class RolloutStorage:
         if self.step >= self.num_transitions_per_env:
             raise AssertionError("Rollout buffer overflow")
         self.observations[self.step].copy_(transition.observations)
+        self.next_observations[self.step].copy_(transition.next_observations)
         if self.privileged_observations is not None: self.privileged_observations[self.step].copy_(transition.critic_observations)
         self.actions[self.step].copy_(transition.actions)
+        self.aux_valid_mask[self.step].copy_(transition.aux_valid_mask.view(-1, 1))
         self.rewards[self.step].copy_(transition.rewards.view(-1, 1))
         self.dones[self.step].copy_(transition.dones.view(-1, 1))
         self.values[self.step].copy_(transition.values)
@@ -151,6 +157,7 @@ class RolloutStorage:
         indices = torch.randperm(num_mini_batches*mini_batch_size, requires_grad=False, device=self.device)
 
         observations = self.observations.flatten(0, 1)
+        next_observations = self.next_observations.flatten(0, 1)
 
         # # shift the observations by one step to the left to get the next observations
         # next_disc_observations = torch.cat((self.disc_observations[1:], self.disc_observations[-1].unsqueeze(0)), dim=0)
@@ -170,6 +177,7 @@ class RolloutStorage:
         advantages = self.advantages.flatten(0, 1)
         old_mu = self.mu.flatten(0, 1)
         old_sigma = self.sigma.flatten(0, 1)
+        aux_valid_mask = self.aux_valid_mask.flatten(0, 1)
 
         for epoch in range(num_epochs):
             for i in range(num_mini_batches):
@@ -187,10 +195,12 @@ class RolloutStorage:
                 advantages_batch = advantages[batch_idx]
                 old_mu_batch = old_mu[batch_idx]
                 old_sigma_batch = old_sigma[batch_idx]
+                next_observations_batch = next_observations[batch_idx]
+                aux_valid_mask_batch = aux_valid_mask[batch_idx]
 
                 
                 yield obs_batch, critic_observations_batch, actions_batch, target_values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None
+                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (None, None), None, next_observations_batch, aux_valid_mask_batch
 
     # for RNNs only
     def reccurent_mini_batch_generator(self, num_mini_batches, num_epochs=8):
@@ -240,6 +250,6 @@ class RolloutStorage:
                 hid_c_batch = hid_c_batch[0] if len(hid_c_batch)==1 else hid_a_batch
 
                 yield obs_batch, critic_obs_batch, actions_batch, values_batch, advantages_batch, returns_batch, \
-                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch
+                       old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch, None, None
                 
                 first_traj = last_traj

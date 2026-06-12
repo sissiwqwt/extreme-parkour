@@ -99,6 +99,7 @@ class OnPolicyRunner:
         self.num_steps_per_env = self.cfg["num_steps_per_env"]
         self.save_interval = self.cfg["save_interval"]
         self.dagger_update_freq = self.alg_cfg["dagger_update_freq"]
+        self.aux_valid_terrain_ids = self._build_aux_valid_terrain_ids()
 
         self.alg.init_storage(
             self.env.num_envs, 
@@ -117,6 +118,30 @@ class OnPolicyRunner:
         self.tot_time = 0
         self.current_learning_iteration = 0
         
+    def _build_aux_valid_terrain_ids(self):
+        valid_terrain_names = {
+            "parkour",
+            "parkour_hurdle",
+            "parkour_flat",
+            "parkour_step",
+            "parkour_gap",
+            "alternating_step",
+            "beam_gap",
+            "asymmetric_gap",
+            "parkour_v2",
+            "narrow_gap",
+            "climbing_wall",
+        }
+        terrain_names = list(self.env.cfg.terrain.terrain_dict.keys())
+        valid_ids = [idx for idx, name in enumerate(terrain_names) if name in valid_terrain_names]
+        return torch.tensor(valid_ids, device=self.device, dtype=torch.long)
+
+    def _compute_aux_valid_mask(self, env_classes, dones):
+        if self.aux_valid_terrain_ids.numel() == 0:
+            return torch.zeros_like(dones, dtype=torch.bool, device=self.device)
+        terrain_valid = (env_classes.long().unsqueeze(-1) == self.aux_valid_terrain_ids.unsqueeze(0)).any(dim=-1)
+        return terrain_valid & (~dones.bool())
+
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
         mean_value_loss = 0.
@@ -127,6 +152,8 @@ class OnPolicyRunner:
         mean_hist_latent_loss = 0.
         mean_priv_reg_loss = 0. 
         priv_reg_coef = 0.
+        mean_next_proprio_aux_loss = 0.
+        mean_aux_valid_fraction = 0.
         entropy_coef = 0.
         # initialize writer
         # if self.log_dir is not None and self.writer is None:
@@ -162,10 +189,12 @@ class OnPolicyRunner:
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
                     actions = self.alg.act(obs, critic_obs, infos, hist_encoding)
+                    current_env_class = self.env.env_class.clone()
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)  # obs has changed to next_obs !! if done obs has been reset
                     critic_obs = privileged_obs if privileged_obs is not None else obs
                     obs, critic_obs, rewards, dones = obs.to(self.device), critic_obs.to(self.device), rewards.to(self.device), dones.to(self.device)
-                    total_rew = self.alg.process_env_step(rewards, dones, infos)
+                    aux_valid_mask = self._compute_aux_valid_mask(current_env_class, dones)
+                    total_rew = self.alg.process_env_step(rewards, dones, infos, next_obs=obs, aux_valid_mask=aux_valid_mask)
                     
                     if self.log_dir is not None:
                         # Book keeping
@@ -195,7 +224,7 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
+            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef, mean_next_proprio_aux_loss, mean_aux_valid_fraction = self.alg.update(current_learning_iteration=it)
             if hist_encoding:
                 print("Updating dagger...")
                 mean_hist_latent_loss = self.alg.update_dagger()
@@ -353,6 +382,7 @@ class OnPolicyRunner:
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
+        wandb_dict['global_step'] = locs['it']
         if len(locs['rewbuffer']) > 0:
             wandb_dict['Train/mean_reward'] = statistics.mean(locs['rewbuffer'])
             wandb_dict['Train/mean_episode_length'] = statistics.mean(locs['lenbuffer'])
@@ -412,21 +442,24 @@ class OnPolicyRunner:
         mean_std = self.alg.actor_critic.std.mean()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 
-        wandb_dict['Loss/value_function'] = ['mean_value_loss']
+        wandb_dict['Loss/value_function'] = locs['mean_value_loss']
         wandb_dict['Loss/surrogate'] = locs['mean_surrogate_loss']
         wandb_dict['Loss/estimator'] = locs['mean_estimator_loss']
         wandb_dict['Loss/hist_latent_loss'] = locs['mean_hist_latent_loss']
         wandb_dict['Loss/priv_reg_loss'] = locs['mean_priv_reg_loss']
+        wandb_dict['Loss/next_proprio_aux'] = locs['mean_next_proprio_aux_loss']
         wandb_dict['Loss/priv_ref_lambda'] = locs['priv_reg_coef']
         wandb_dict['Loss/entropy_coef'] = locs['entropy_coef']
         wandb_dict['Loss/learning_rate'] = self.alg.learning_rate
         wandb_dict['Loss/discriminator'] = locs['mean_disc_loss']
         wandb_dict['Loss/discriminator_accuracy'] = locs['mean_disc_acc']
+        wandb_dict['Train/aux_valid_fraction'] = locs['mean_aux_valid_fraction']
 
         wandb_dict['Policy/mean_noise_std'] = mean_std.item()
         wandb_dict['Perf/total_fps'] = fps
         wandb_dict['Perf/collection time'] = locs['collection_time']
         wandb_dict['Perf/learning_time'] = locs['learn_time']
+        wandb_dict['global_step'] = locs['it']
         if len(locs['rewbuffer']) > 0:
             wandb_dict['Train/mean_reward'] = statistics.mean(locs['rewbuffer'])
             wandb_dict['Train/mean_reward_explr'] = statistics.mean(locs['rew_explr_buffer'])
@@ -447,8 +480,10 @@ class OnPolicyRunner:
                             'collection_time']:.3f}s, learning {locs['learn_time']:.3f}s)\n"""
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
+                          f"""{'Next proprio aux loss:':>{pad}} {locs['mean_next_proprio_aux_loss']:.4f}\n"""
                           f"""{'Discriminator loss:':>{pad}} {locs['mean_disc_loss']:.4f}\n"""
                           f"""{'Discriminator accuracy:':>{pad}} {locs['mean_disc_acc']:.4f}\n"""
+                          f"""{'Aux valid fraction:':>{pad}} {locs['mean_aux_valid_fraction']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n"""
                           f"""{'Mean reward (total):':>{pad}} {statistics.mean(locs['rewbuffer']):.2f}\n"""
                           f"""{'Mean reward (task):':>{pad}} {statistics.mean(locs['rewbuffer']) - statistics.mean(locs['rew_explr_buffer']):.2f}\n"""
@@ -465,6 +500,8 @@ class OnPolicyRunner:
                           f"""{'Value function loss:':>{pad}} {locs['mean_value_loss']:.4f}\n"""
                           f"""{'Surrogate loss:':>{pad}} {locs['mean_surrogate_loss']:.4f}\n"""
                           f"""{'Estimator loss:':>{pad}} {locs['mean_estimator_loss']:.4f}\n"""
+                          f"""{'Next proprio aux loss:':>{pad}} {locs['mean_next_proprio_aux_loss']:.4f}\n"""
+                          f"""{'Aux valid fraction:':>{pad}} {locs['mean_aux_valid_fraction']:.4f}\n"""
                           f"""{'Mean action noise std:':>{pad}} {mean_std.item():.2f}\n""")
                         #   f"""{'Mean reward/step:':>{pad}} {locs['mean_reward']:.2f}\n"""
                         #   f"""{'Mean episode length/episode:':>{pad}} {locs['mean_trajectory_length']:.2f}\n""")
@@ -499,7 +536,56 @@ class OnPolicyRunner:
         print("*" * 80)
         print("Loading model from {}...".format(path))
         loaded_dict = torch.load(path, map_location=self.device)
-        self.alg.actor_critic.load_state_dict(loaded_dict['model_state_dict'])
+        model_state_dict = loaded_dict['model_state_dict']
+
+        legacy_backbone_keys = [
+            key for key in model_state_dict.keys()
+            if key.startswith("actor.actor_backbone.")
+        ]
+        if legacy_backbone_keys and not any(
+            key.startswith("actor.actor_body.") for key in model_state_dict.keys()
+        ):
+            print("Detected legacy actor_backbone checkpoint layout. Remapping keys for compatibility...")
+            remapped_state_dict = dict(model_state_dict)
+            backbone_indices = sorted(
+                {
+                    int(key.split(".")[2])
+                    for key in legacy_backbone_keys
+                    if key.split(".")[2].isdigit()
+                }
+            )
+            last_backbone_index = backbone_indices[-1]
+            for key in legacy_backbone_keys:
+                parts = key.split(".")
+                layer_index = int(parts[2])
+                suffix = ".".join(parts[3:])
+                if layer_index == last_backbone_index:
+                    new_key = f"actor.actor_head.{suffix}"
+                else:
+                    new_key = f"actor.actor_body.{layer_index}.{suffix}"
+                remapped_state_dict[new_key] = remapped_state_dict.pop(key)
+            model_state_dict = remapped_state_dict
+
+        incompatible = self.alg.actor_critic.load_state_dict(
+            model_state_dict, strict=False
+        )
+        missing_keys = set(incompatible.missing_keys)
+        unexpected_keys = set(incompatible.unexpected_keys)
+        allowed_missing_prefixes = {
+            "actor.next_proprio_head.",
+        }
+        disallowed_missing = {
+            key for key in missing_keys
+            if not any(key.startswith(prefix) for prefix in allowed_missing_prefixes)
+        }
+        if disallowed_missing or unexpected_keys:
+            raise RuntimeError(
+                "Error(s) in loading state_dict for {}:\n\tMissing key(s): {}\n\tUnexpected key(s): {}".format(
+                    self.alg.actor_critic.__class__.__name__,
+                    sorted(disallowed_missing),
+                    sorted(unexpected_keys),
+                )
+            )
         self.alg.estimator.load_state_dict(loaded_dict['estimator_state_dict'])
         if self.if_depth:
             if 'depth_encoder_state_dict' not in loaded_dict:
