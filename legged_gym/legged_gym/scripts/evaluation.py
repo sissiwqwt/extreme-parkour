@@ -145,7 +145,6 @@ IMPLEMENTED_TERRAIN_NAMES = {
     "parkour_gap",
     "bean_gap",
     *CUSTOM_TERRAIN_NAMES,
-    "demo",
 }
 
 TERRAIN_SETS = {

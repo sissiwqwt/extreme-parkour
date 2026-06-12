@@ -150,7 +150,7 @@ class LeggedRobotCfg(BaseConfig):
         stepping_stone_distance = [0.02, 0.08]
         downsampled_scale = 0.075
         curriculum = True
-        task_targeted_curriculum = True
+        task_targeted_curriculum = False
         task_curriculum_window = 200
         task_curriculum_min_samples = 50
         task_curriculum_up_threshold = 0.75
@@ -189,13 +189,13 @@ class LeggedRobotCfg(BaseConfig):
                         "platform": 0.,
                         "large stairs up": 0.,
                         "large stairs down": 0.,
-                        "parkour": 0.1,
-                        "parkour_hurdle": 0.5,
+                        "parkour": 0.15,
+                        "parkour_hurdle": 0.1,
                         "parkour_flat": 0.05,
                         "parkour_step": 0.1,
                         "parkour_gap": 0.1,
-                        "alternating_step": 0.0,
-                        "bean_gap": 0.1,
+                        "alternating_step": 0.1,
+                        "beam_gap": 0.1,
                         "asymmetric_gap": 0.1,
                         "parkour_v2": 0.15,
                         "narrow_gap": 0.1,

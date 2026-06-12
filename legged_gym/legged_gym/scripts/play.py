@@ -112,7 +112,7 @@ def play(args):
                                     "parkour_flat": 0.,
                                     "parkour_step": 0.2,
                                     "parkour_gap": 0.2, 
-                                    "demo": 0.2}
+                                    "demo": 0.0}
     
     env_cfg.terrain.terrain_proportions = list(env_cfg.terrain.terrain_dict.values())
     env_cfg.terrain.curriculum = False
