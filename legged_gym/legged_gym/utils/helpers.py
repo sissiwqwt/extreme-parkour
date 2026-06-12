@@ -85,6 +85,29 @@ def parse_bool(value):
         return False
     raise argparse.ArgumentTypeError("Expected a boolean value.")
 
+def parse_next_proprio_head_dims(value):
+    preset_map = {
+        "small": [128, 64],
+        "medium": [256, 128],
+        "large": [256, 128, 64],
+    }
+    if isinstance(value, list):
+        return value
+    value = value.strip().lower()
+    if value in preset_map:
+        return preset_map[value]
+    try:
+        dims = [int(part.strip()) for part in value.split(",") if part.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "Expected one of {small, medium, large} or a comma-separated list like 256,128."
+        ) from exc
+    if not dims or any(dim <= 0 for dim in dims):
+        raise argparse.ArgumentTypeError(
+            "Expected positive hidden dimensions, e.g. 128,64 or preset {small, medium, large}."
+        )
+    return dims
+
 def parse_sim_params(args, cfg):
     # code from Isaac Gym Preview 2
     # initialize sim params
@@ -115,10 +138,23 @@ def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="model"):
         model_parent = os.path.dirname(root)
         model_names = os.listdir(model_parent)
         model_names = [name for name in model_names if os.path.isdir(os.path.join(model_parent, name))]
+        normalized_candidate = model_name_cand.lower().replace("-", "").replace("_", "")
         for name in model_names:
-            if len(name) >= 6:
-                if name[:6] == model_name_cand:
+            if name == model_name_cand:
+                root = os.path.join(model_parent, name)
+                break
+        else:
+            for name in model_names:
+                normalized_name = name.lower().replace("-", "").replace("_", "")
+                if normalized_name == normalized_candidate:
                     root = os.path.join(model_parent, name)
+                    break
+            else:
+                for name in model_names:
+                    normalized_name = name.lower().replace("-", "").replace("_", "")
+                    if len(normalized_name) >= 6 and normalized_name[:6] == normalized_candidate[:6]:
+                        root = os.path.join(model_parent, name)
+                        break
     if checkpoint==-1:
         models = [file for file in os.listdir(root) if model_name_include in file]
         models.sort(key=lambda m: '{0:0>15}'.format(m))
@@ -166,6 +202,8 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
         if not args.delay and not args.resume and not args.use_camera and args.headless: # if train from scratch
             env_cfg.domain_rand.action_delay = True
             env_cfg.domain_rand.action_curr_step = env_cfg.domain_rand.action_curr_step_scratch
+        if hasattr(args, "post_delay_predictor_start_iter") and args.post_delay_predictor_start_iter is not None:
+            env_cfg.domain_rand.delay_update_global_steps = args.post_delay_predictor_start_iter * 24
     if cfg_train is not None:
         if args.seed is not None:
             cfg_train.seed = args.seed
@@ -187,6 +225,10 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.runner.checkpoint = args.checkpoint
         if hasattr(args, "use_aux_proprio_loss") and args.use_aux_proprio_loss is not None:
             cfg_train.algorithm.use_next_proprio_aux_loss = args.use_aux_proprio_loss
+        if hasattr(args, "next_proprio_head_dims") and args.next_proprio_head_dims is not None:
+            cfg_train.policy.next_proprio_head_hidden_dims = args.next_proprio_head_dims
+        if hasattr(args, "post_delay_predictor_start_iter") and args.post_delay_predictor_start_iter is not None:
+            cfg_train.policy.post_delay_predictor_start_iter = args.post_delay_predictor_start_iter
 
     return env_cfg, cfg_train
 
@@ -231,7 +273,9 @@ def get_args():
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
-        {"name": "--use_aux_proprio_loss", "type": parse_bool, "default": True, "help": "Enable the pre-8000 next proprio auxiliary prediction loss during base training."}
+        {"name": "--use_aux_proprio_loss", "type": parse_bool, "default": True, "help": "Enable the pre-8000 next proprio auxiliary prediction loss during base training."},
+        {"name": "--next_proprio_head_dims", "type": parse_next_proprio_head_dims, "default": None, "help": "Next proprio head hidden dims preset or explicit list. Presets: small=128,64 medium=256,128 large=256,128,64. Example: --next_proprio_head_dims medium or --next_proprio_head_dims 256,128"},
+        {"name": "--post_delay_predictor_start_iter", "type": int, "default": None, "help": "Iteration to start using the post-delay predictor in policy forward. Defaults to config value 8000."}
 
 
     ]

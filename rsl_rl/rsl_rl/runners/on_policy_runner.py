@@ -142,6 +142,21 @@ class OnPolicyRunner:
         terrain_valid = (env_classes.long().unsqueeze(-1) == self.aux_valid_terrain_ids.unsqueeze(0)).any(dim=-1)
         return terrain_valid & (~dones.bool())
 
+    def _get_predictor_action_context(self, current_learning_iteration):
+        if current_learning_iteration < self.alg.actor_critic.post_delay_predictor_start_iter:
+            return None
+        if not self.env.cfg.domain_rand.action_delay or not hasattr(self.env, "delay"):
+            return None
+
+        delay = int(self.env.delay.item()) if torch.is_tensor(self.env.delay) else int(self.env.delay)
+        if delay < 1:
+            return None
+
+        predictor_action = self.env.action_history_buf[:, -delay].clone()
+        clip_actions = self.env.cfg.normalization.clip_actions / self.env.cfg.control.action_scale
+        predictor_action = torch.clip(predictor_action, -clip_actions, clip_actions)
+        return predictor_action.to(self.device)
+
 
     def learn_RL(self, num_learning_iterations, init_at_random_ep_len=False):
         mean_value_loss = 0.
@@ -188,7 +203,15 @@ class OnPolicyRunner:
             # Rollout
             with torch.inference_mode():
                 for i in range(self.num_steps_per_env):
-                    actions = self.alg.act(obs, critic_obs, infos, hist_encoding)
+                    predictor_action = self._get_predictor_action_context(it)
+                    actions = self.alg.act(
+                        obs,
+                        critic_obs,
+                        infos,
+                        hist_encoding,
+                        current_learning_iteration=it,
+                        predictor_action=predictor_action,
+                    )
                     current_env_class = self.env.env_class.clone()
                     obs, privileged_obs, rewards, dones, infos = self.env.step(actions)  # obs has changed to next_obs !! if done obs has been reset
                     critic_obs = privileged_obs if privileged_obs is not None else obs

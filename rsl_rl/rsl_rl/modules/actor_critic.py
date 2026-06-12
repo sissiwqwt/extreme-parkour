@@ -140,9 +140,9 @@ class Actor(nn.Module):
             self.scan_encoder = nn.Identity()
             self.scan_encoder_output_dim = num_scan
         
-        actor_input_dim = num_prop + self.scan_encoder_output_dim + num_priv_explicit + priv_encoder_output_dim
+        self.actor_input_dim = num_prop + self.scan_encoder_output_dim + num_priv_explicit + priv_encoder_output_dim
         actor_body_layers = [
-            nn.Linear(actor_input_dim, actor_hidden_dims[0]),
+            nn.Linear(self.actor_input_dim, actor_hidden_dims[0]),
             activation,
         ]
         for l in range(len(actor_hidden_dims) - 1):
@@ -153,7 +153,7 @@ class Actor(nn.Module):
         self.actor_output_activation = nn.Tanh() if tanh_encoder_output else nn.Identity()
 
         next_proprio_layers = []
-        next_proprio_input_dim = actor_hidden_dims[-1] + num_actions
+        next_proprio_input_dim = self.actor_input_dim + num_actions
         if len(next_proprio_head_hidden_dims) == 0:
             next_proprio_layers.append(nn.Linear(next_proprio_input_dim, num_prop))
         else:
@@ -170,7 +170,7 @@ class Actor(nn.Module):
         actions = self.actor_head(actor_features)
         return self.actor_output_activation(actions)
 
-    def build_actor_features(self, obs, hist_encoding: bool, scandots_latent=None):
+    def build_shared_actor_input(self, obs, hist_encoding: bool, scandots_latent=None):
         if self.if_scan_encode:
             obs_scan = obs[:, self.num_prop:self.num_prop + self.num_scan]
             if scandots_latent is None:
@@ -185,12 +185,17 @@ class Actor(nn.Module):
             latent = self.infer_hist_latent(obs)
         else:
             latent = self.infer_priv_latent(obs)
-        backbone_input = torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
-        return self.actor_body(backbone_input)
+        return torch.cat([obs_prop_scan, obs_priv_explicit, latent], dim=1)
 
-    def predict_next_proprio(self, obs, action, hist_encoding: bool, scandots_latent=None):
-        actor_features = self.build_actor_features(obs, hist_encoding, scandots_latent=scandots_latent)
-        predictor_input = torch.cat([actor_features, action], dim=1)
+    def build_actor_features(self, obs, hist_encoding: bool, scandots_latent=None):
+        shared_actor_input = self.build_shared_actor_input(obs, hist_encoding, scandots_latent=scandots_latent)
+        return self.actor_body(shared_actor_input)
+
+    def predict_next_proprio(self, obs, action, hist_encoding: bool, scandots_latent=None, detach_predictor_input=False):
+        predictor_base_input = self.build_shared_actor_input(obs, hist_encoding, scandots_latent=scandots_latent)
+        if detach_predictor_input:
+            predictor_base_input = predictor_base_input.detach()
+        predictor_input = torch.cat([predictor_base_input, action], dim=1)
         return self.next_proprio_head(predictor_input)
     
     def infer_priv_latent(self, obs):
@@ -223,6 +228,11 @@ class ActorCriticRMA(nn.Module):
         priv_encoder_dims = kwargs.pop('priv_encoder_dims')
         tanh_encoder_output = kwargs.pop('tanh_encoder_output')
         next_proprio_head_hidden_dims = kwargs.pop('next_proprio_head_hidden_dims', [128, 64])
+        self.use_post_delay_predictor = kwargs.pop('use_post_delay_predictor', True)
+        self.post_delay_predictor_start_iter = kwargs.pop('post_delay_predictor_start_iter', 8000)
+        self.post_delay_predictor_alpha_start = kwargs.pop('post_delay_predictor_alpha_start', 0.0)
+        self.post_delay_predictor_alpha_end = kwargs.pop('post_delay_predictor_alpha_end', 1.0)
+        self.post_delay_predictor_alpha_ramp_iters = kwargs.pop('post_delay_predictor_alpha_ramp_iters', 2000)
         if kwargs:
             print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
         super(ActorCriticRMA, self).__init__()
@@ -292,20 +302,79 @@ class ActorCriticRMA(nn.Module):
     def entropy(self):
         return self.distribution.entropy().sum(dim=-1)
 
-    def update_distribution(self, observations, hist_encoding):
-        mean = self.actor(observations, hist_encoding)
+    def _should_use_delay_predictor(self, current_learning_iteration=None, delayed_action=None):
+        return (
+            self.use_post_delay_predictor
+            and delayed_action is not None
+            and current_learning_iteration is not None
+            and current_learning_iteration >= self.post_delay_predictor_start_iter
+        )
+
+    def get_post_delay_predictor_alpha(self, current_learning_iteration=None):
+        if current_learning_iteration is None or current_learning_iteration < self.post_delay_predictor_start_iter:
+            return self.post_delay_predictor_alpha_start
+        ramp_iters = max(self.post_delay_predictor_alpha_ramp_iters, 1)
+        progress = min(max((current_learning_iteration - self.post_delay_predictor_start_iter) / ramp_iters, 0.0), 1.0)
+        return self.post_delay_predictor_alpha_start + progress * (self.post_delay_predictor_alpha_end - self.post_delay_predictor_alpha_start)
+
+    def imagine_next_observation(self, observations, delayed_action, hist_encoding=False, scandots_latent=None, current_learning_iteration=None):
+        next_proprio = self.predict_next_proprio(
+            observations,
+            delayed_action,
+            hist_encoding=hist_encoding,
+            scandots_latent=scandots_latent,
+        )
+        imagined_observations = observations.clone()
+        alpha = self.get_post_delay_predictor_alpha(current_learning_iteration)
+        imagined_observations[:, :self.actor.num_prop] = (
+            (1.0 - alpha) * observations[:, :self.actor.num_prop] + alpha * next_proprio
+        )
+        return imagined_observations
+
+    def compute_action_mean(self, observations, hist_encoding=False, delayed_action=None, current_learning_iteration=None, scandots_latent=None):
+        if self._should_use_delay_predictor(current_learning_iteration, delayed_action):
+            imagined_observations = self.imagine_next_observation(
+                observations,
+                delayed_action,
+                hist_encoding=hist_encoding,
+                scandots_latent=scandots_latent,
+                current_learning_iteration=current_learning_iteration,
+            )
+            return self.actor(imagined_observations, hist_encoding, scandots_latent=scandots_latent)
+        return self.actor(observations, hist_encoding, scandots_latent=scandots_latent)
+
+    def update_distribution(self, observations, hist_encoding, delayed_action=None, current_learning_iteration=None, scandots_latent=None):
+        mean = self.compute_action_mean(
+            observations,
+            hist_encoding=hist_encoding,
+            delayed_action=delayed_action,
+            current_learning_iteration=current_learning_iteration,
+            scandots_latent=scandots_latent,
+        )
         self.distribution = Normal(mean, mean*0. + self.std)
 
-    def act(self, observations, hist_encoding=False, **kwargs):
-        self.update_distribution(observations, hist_encoding)
+    def act(self, observations, hist_encoding=False, delayed_action=None, current_learning_iteration=None, scandots_latent=None, **kwargs):
+        self.update_distribution(
+            observations,
+            hist_encoding,
+            delayed_action=delayed_action,
+            current_learning_iteration=current_learning_iteration,
+            scandots_latent=scandots_latent,
+        )
         return self.distribution.sample()
     
     def get_actions_log_prob(self, actions):
         return self.distribution.log_prob(actions).sum(dim=-1)
 
-    def act_inference(self, observations, hist_encoding=False, eval=False, scandots_latent=None, **kwargs):
+    def act_inference(self, observations, hist_encoding=False, eval=False, scandots_latent=None, delayed_action=None, current_learning_iteration=None, **kwargs):
         if not eval:
-            actions_mean = self.actor(observations, hist_encoding, eval, scandots_latent)
+            actions_mean = self.compute_action_mean(
+                observations,
+                hist_encoding=hist_encoding,
+                delayed_action=delayed_action,
+                current_learning_iteration=current_learning_iteration,
+                scandots_latent=scandots_latent,
+            )
             return actions_mean
         else:
             actions_mean, latent_hist, latent_priv = self.actor(observations, hist_encoding, eval=True)
@@ -315,8 +384,14 @@ class ActorCriticRMA(nn.Module):
         value = self.critic(critic_observations)
         return value
 
-    def predict_next_proprio(self, observations, actions, hist_encoding=False, scandots_latent=None, **kwargs):
-        return self.actor.predict_next_proprio(observations, actions, hist_encoding, scandots_latent=scandots_latent)
+    def predict_next_proprio(self, observations, actions, hist_encoding=False, scandots_latent=None, detach_predictor_input=False, **kwargs):
+        return self.actor.predict_next_proprio(
+            observations,
+            actions,
+            hist_encoding,
+            scandots_latent=scandots_latent,
+            detach_predictor_input=detach_predictor_input,
+        )
     
     def reset_std(self, std, num_actions, device):
         new_std = std * torch.ones(num_actions, device=device)

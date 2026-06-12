@@ -379,6 +379,11 @@ class LeggedRobotCfgPPO(BaseConfig):
         next_proprio_head_hidden_dims = [128, 64]
         priv_encoder_dims = [64, 20]
         activation = 'elu' # can be elu, relu, selu, crelu, lrelu, tanh, sigmoid
+        use_post_delay_predictor = True
+        post_delay_predictor_start_iter = 8000
+        post_delay_predictor_alpha_start = 0.2
+        post_delay_predictor_alpha_end = 1.0
+        post_delay_predictor_alpha_ramp_iters = 2000
         # only for 'ActorCriticRecurrent':
         rnn_type = 'lstm'
         rnn_hidden_size = 512
@@ -405,8 +410,10 @@ class LeggedRobotCfgPPO(BaseConfig):
         priv_reg_coef_schedual = [0, 0.1, 2000, 3000]
         priv_reg_coef_schedual_resume = [0, 0.1, 0, 1]
         use_next_proprio_aux_loss = True
-        next_proprio_aux_coef = 0.1
+        next_proprio_aux_coef = 1.0
         next_proprio_aux_stop_iter = 8000
+        use_post_next_proprio_sup_loss = True
+        post_next_proprio_sup_coef = 0.1
     
     class depth_encoder:
         if_depth = LeggedRobotCfg.depth.use_camera
