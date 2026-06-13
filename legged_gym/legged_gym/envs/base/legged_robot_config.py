@@ -413,7 +413,7 @@ class LeggedRobotCfgPPO(BaseConfig):
         next_proprio_aux_coef = 1.0
         next_proprio_aux_stop_iter = 8000
         use_post_next_proprio_sup_loss = True
-        post_next_proprio_sup_coef = 0.1
+        post_next_proprio_sup_coef = 1.0
     
     class depth_encoder:
         if_depth = LeggedRobotCfg.depth.use_camera

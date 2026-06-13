@@ -439,6 +439,12 @@ def _make_eval_env(name, args, env_cfg, terrain_dict):
 
 
 def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
+    current_learning_iteration = _resolve_inference_iteration(
+        args,
+        getattr(ppo_runner, "_evaluation_resume_dir", None),
+        ppo_runner.alg.actor_critic.post_delay_predictor_start_iter,
+    )
+    delayed_action = _get_predictor_action_context(env, ppo_runner, current_learning_iteration)
     depth_latent = None
     if policy_type == "depth":
         if infos.get("depth") is not None:
@@ -452,10 +458,88 @@ def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, p
 
     with torch.no_grad():
         if policy_type == "depth" and hasattr(ppo_runner.alg, "depth_actor"):
-            return ppo_runner.alg.depth_actor(
-                obs.detach(), hist_encoding=True, scandots_latent=depth_latent
+            return _run_actor_module_inference(
+                ppo_runner.alg.depth_actor,
+                obs.detach(),
+                hist_encoding=True,
+                scandots_latent=depth_latent,
+                delayed_action=delayed_action,
+                current_learning_iteration=current_learning_iteration,
+                actor_critic=ppo_runner.alg.actor_critic,
             )
-        return policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+        return policy(
+            obs.detach(),
+            hist_encoding=True,
+            scandots_latent=depth_latent,
+            delayed_action=delayed_action,
+            current_learning_iteration=current_learning_iteration,
+        )
+
+
+def _resolve_inference_iteration(args, resume_dir, predictor_start_iter):
+    if args.checkpoint is not None and args.checkpoint >= 0:
+        return args.checkpoint
+    if resume_dir is not None and os.path.isdir(resume_dir):
+        latest_iter = None
+        for name in os.listdir(resume_dir):
+            match = re.fullmatch(r"model_(\d+)\.pt", name)
+            if match:
+                value = int(match.group(1))
+                latest_iter = value if latest_iter is None else max(latest_iter, value)
+        if latest_iter is not None:
+            return latest_iter
+    return predictor_start_iter
+
+
+def _get_predictor_action_context(env, ppo_runner, current_learning_iteration):
+    actor_critic = ppo_runner.alg.actor_critic
+    if current_learning_iteration < actor_critic.post_delay_predictor_start_iter:
+        return None
+    if not env.cfg.domain_rand.action_delay or not hasattr(env, "delay"):
+        return None
+
+    delay = int(env.delay.item()) if torch.is_tensor(env.delay) else int(env.delay)
+    if delay < 1:
+        return None
+
+    predictor_action = env.action_history_buf[:, -delay].clone()
+    clip_actions = env.cfg.normalization.clip_actions / env.cfg.control.action_scale
+    predictor_action = torch.clip(predictor_action, -clip_actions, clip_actions)
+    return predictor_action.to(ppo_runner.device)
+
+
+def _run_actor_module_inference(
+    actor_module,
+    observations,
+    hist_encoding,
+    scandots_latent,
+    delayed_action,
+    current_learning_iteration,
+    actor_critic,
+):
+    if (
+        delayed_action is not None
+        and actor_critic.use_post_delay_predictor
+        and current_learning_iteration >= actor_critic.post_delay_predictor_start_iter
+        and hasattr(actor_module, "predict_next_proprio")
+    ):
+        next_proprio = actor_module.predict_next_proprio(
+            observations,
+            delayed_action,
+            hist_encoding=hist_encoding,
+            scandots_latent=scandots_latent,
+        )
+        imagined_observations = observations.clone()
+        alpha = actor_critic.get_post_delay_predictor_alpha(current_learning_iteration)
+        imagined_observations[:, : actor_module.num_prop] = (
+            (1.0 - alpha) * observations[:, : actor_module.num_prop] + alpha * next_proprio
+        )
+        observations = imagined_observations
+    return actor_module(
+        observations,
+        hist_encoding=hist_encoding,
+        scandots_latent=scandots_latent,
+    )
 
 
 def evaluate(args, eval_cfg):
@@ -499,6 +583,7 @@ def evaluate(args, eval_cfg):
         init_wandb=False,
         load_optimizer=False,
     )
+    ppo_runner._evaluation_resume_dir = resolved_log_pth
     policy = ppo_runner.get_inference_policy(device=env.device)
     depth_encoder = (
         ppo_runner.get_depth_encoder_inference_policy(device=env.device)
