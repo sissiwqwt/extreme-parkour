@@ -151,13 +151,14 @@ class LeggedRobotCfg(BaseConfig):
         downsampled_scale = 0.075
         curriculum = True
         task_targeted_curriculum = True
-        task_targeted_curriculum_window = 120
-        task_targeted_curriculum_min_samples = 40
+        task_targeted_curriculum_window = 200
+        task_targeted_curriculum_min_samples = 80
         task_targeted_curriculum_up_threshold = 0.75
         task_targeted_curriculum_down_threshold = 0.30
         task_targeted_curriculum_task_key = "terrain_name" # "terrain_name" or "column"
+        task_targeted_curriculum_level_sampling = "max" # "max" or "center"
         task_targeted_curriculum_level_jitter = 2
-        task_targeted_curriculum_level_jitter_offsets = [-2, -1, 0, 1]
+        task_targeted_curriculum_level_jitter_offsets = [-1, 0, 1]
         task_targeted_curriculum_success_mode = "waypoint" # "goal", "distance", or "waypoint"
         task_targeted_curriculum_waypoint_up_threshold = 0.75
         task_targeted_curriculum_waypoint_down_threshold = 0.25
@@ -196,16 +197,16 @@ class LeggedRobotCfg(BaseConfig):
                         "large stairs up": 0.,
                         "large stairs down": 0.,
                         "parkour": 0.08,
-                        "parkour_hurdle": 0.16,
+                        "parkour_hurdle": 0.18,
                         "parkour_flat": 0.03,
-                        "parkour_step": 0.16,
-                        "parkour_gap": 0.07,
-                        "alternating_step": 0.14,
-                        "beam_gap": 0.08,
-                        "asymmetric_gap": 0.07,
+                        "parkour_step": 0.18,
+                        "parkour_gap": 0.06,
+                        "alternating_step": 0.16,
+                        "beam_gap": 0.06,
+                        "asymmetric_gap": 0.06,
                         "parkour_v2": 0.12,
-                        "narrow_gap": 0.07,
-                        "climbing_wall": 0.22,
+                        "narrow_gap": 0.05,
+                        "climbing_wall": 0.18,
                         "demo": 0.0,}
         terrain_proportions = list(terrain_dict.values())
         
@@ -312,9 +313,9 @@ class LeggedRobotCfg(BaseConfig):
             # tracking rewards
             tracking_goal_vel = 1.5
             tracking_yaw = 0.5
-            goal_progress = 5.0
-            goal_reached = 4.0
-            stuck = -2.0
+            goal_progress = 8.0
+            goal_reached = 6.0
+            stuck = -3.0
             # regularization rewards
             lin_vel_z = -1.0
             ang_vel_xy = -0.05

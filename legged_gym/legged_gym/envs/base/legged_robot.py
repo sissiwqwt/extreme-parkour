@@ -1161,6 +1161,19 @@ class LeggedRobot(BaseTask):
 
     def _sample_task_targeted_levels(self, task_ids):
         base_levels = self.task_targeted_levels[task_ids]
+        level_sampling = str(self._task_targeted_cfg("level_sampling", "center")).lower()
+        if level_sampling == "max":
+            sampled = torch.floor(
+                torch.rand(base_levels.shape, device=self.device)
+                * (base_levels.float() + 1.0)
+            ).long()
+            return torch.clamp(sampled, 0, self.max_terrain_level - 1)
+        if level_sampling != "center":
+            raise ValueError(
+                f"Unknown task-targeted curriculum level_sampling '{level_sampling}'. "
+                "Expected 'max' or 'center'."
+            )
+
         jitter_offsets = self._task_targeted_cfg("level_jitter_offsets", None)
         if jitter_offsets is not None:
             offsets = torch.tensor(
