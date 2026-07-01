@@ -46,6 +46,39 @@ METRIC_NAMES = (
 )
 
 
+def _local_pythonpath_entries(script_dir: Path):
+    repo_root = script_dir.parents[3]
+    return [
+        str(repo_root / "legged_gym"),
+        str(repo_root / "rsl_rl"),
+    ]
+
+
+def _prepend_pythonpath(env, entries):
+    child_env = env.copy()
+    existing = child_env.get("PYTHONPATH")
+    path_parts = [entry for entry in entries if entry]
+    if existing:
+        path_parts.append(existing)
+    child_env["PYTHONPATH"] = os.pathsep.join(path_parts)
+    return child_env
+
+
+def _ensure_python_runtime_lib(env):
+    child_env = env.copy()
+    lib_dir = Path(sys.executable).resolve().parents[1] / "lib"
+    if not lib_dir.exists():
+        return child_env
+    existing = child_env.get("LD_LIBRARY_PATH")
+    if existing:
+        parts = existing.split(os.pathsep)
+        if str(lib_dir) not in parts:
+            child_env["LD_LIBRARY_PATH"] = os.pathsep.join([str(lib_dir), *parts])
+    else:
+        child_env["LD_LIBRARY_PATH"] = str(lib_dir)
+    return child_env
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -208,6 +241,30 @@ def load_json(path: Path):
         return json.load(f)
 
 
+def load_existing_csv_rows(path: Path):
+    if not path.exists():
+        return []
+    with path.open("r", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = []
+        for row in reader:
+            normalized = {}
+            for field in CSV_FIELDS:
+                normalized[field] = row.get(field)
+            rows.append(normalized)
+        return rows
+
+
+def load_existing_json_records(path: Path):
+    if not path.exists():
+        return []
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        return []
+    records = payload.get("records", [])
+    return records if isinstance(records, list) else []
+
+
 def find_summary_json(run_dir: Path) -> Path:
     json_files = sorted(path for path in run_dir.glob("*.json") if path.is_file())
     if len(json_files) != 1:
@@ -296,6 +353,7 @@ def pick_gpu_id():
 
 def evaluation_env(gpu_id):
     env = os.environ.copy()
+    env = _prepend_pythonpath(env, _local_pythonpath_entries(Path(__file__).resolve().parent))
     if gpu_id is None:
         return env, []
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
@@ -341,6 +399,7 @@ def run_via_evaluation_repeat(
     script_dir: Path,
     proj_name: str,
     exptid: str,
+    logs_root: Path,
     checkpoint: int,
     repeats: int,
     gpu_id,
@@ -350,6 +409,8 @@ def run_via_evaluation_repeat(
     evaluation_repeat_py = script_dir / "evaluation_repeat.py"
     if not evaluation_repeat_py.exists():
         return None
+    child_env = _prepend_pythonpath(os.environ.copy(), _local_pythonpath_entries(script_dir))
+    child_env = _ensure_python_runtime_lib(child_env)
 
     with tempfile.TemporaryDirectory(prefix=f"eval_sweep_{_safe_name(exptid)}_{checkpoint}_") as temp_dir:
         temp_root = Path(temp_dir)
@@ -371,6 +432,8 @@ def run_via_evaluation_repeat(
             cmd.append("--auto_gpu")
         cmd.extend(
             [
+                "--logs_root",
+                str(logs_root),
                 "--proj_name",
                 proj_name,
                 "--exptid",
@@ -383,6 +446,7 @@ def run_via_evaluation_repeat(
         result = subprocess.run(
             cmd,
             cwd=script_dir,
+            env=child_env,
             capture_output=True,
             text=True,
         )
@@ -405,6 +469,7 @@ def run_via_evaluation_py(
     script_dir: Path,
     proj_name: str,
     exptid: str,
+    logs_root: Path,
     checkpoint: int,
     repeats: int,
     gpu_id,
@@ -429,6 +494,8 @@ def run_via_evaluation_py(
                 "--output_dir",
                 str(run_dir),
                 *device_args,
+                "--logs_root",
+                str(logs_root),
                 "--proj_name",
                 proj_name,
                 "--exptid",
@@ -479,6 +546,7 @@ def run_repeat_eval(
     script_dir: Path,
     proj_name: str,
     exptid: str,
+    logs_root: Path,
     checkpoint: int,
     repeats: int,
     gpu_id,
@@ -489,6 +557,7 @@ def run_repeat_eval(
         script_dir=script_dir,
         proj_name=proj_name,
         exptid=exptid,
+        logs_root=logs_root,
         checkpoint=checkpoint,
         repeats=repeats,
         gpu_id=gpu_id,
@@ -501,6 +570,7 @@ def run_repeat_eval(
         script_dir=script_dir,
         proj_name=proj_name,
         exptid=exptid,
+        logs_root=logs_root,
         checkpoint=checkpoint,
         repeats=repeats,
         gpu_id=gpu_id,
@@ -522,6 +592,23 @@ def build_csv_row(proj_name: str, exptid: str, label: str, checkpoint: int, repe
         row[f"{metric_name}_mean"] = None if stats is None else stats.get("mean")
         row[f"{metric_name}_std"] = None if stats is None else stats.get("std")
     return row
+
+
+def write_outputs(
+    json_path: Path,
+    csv_path: Path,
+    json_payload,
+    csv_rows,
+):
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    with json_path.open("w") as f:
+        json.dump(json_payload, f, indent=2)
+
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+        writer.writerows(csv_rows)
 
 
 def main():
@@ -559,8 +646,31 @@ def main():
     if selected_gpu is None and args.auto_gpu:
         selected_gpu = pick_gpu_id()
 
-    records = []
-    csv_rows = []
+    existing_records = load_existing_json_records(json_path)
+    existing_csv_rows = load_existing_csv_rows(csv_path)
+    records = list(existing_records)
+    csv_rows = list(existing_csv_rows)
+    json_payload = {
+        "proj_name": args.proj_name,
+        "label": label,
+        "repeats": args.repeats,
+        "checkpoint_start": args.checkpoint_start,
+        "checkpoint_step": args.checkpoint_step,
+        "checkpoint_end": args.checkpoint_end,
+        "selected_gpu": selected_gpu,
+        "logs_root": str(logs_root),
+        "eval_args": eval_args,
+        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+        "records": records,
+    }
+
+    write_outputs(
+        json_path=json_path,
+        csv_path=csv_path,
+        json_payload=json_payload,
+        csv_rows=csv_rows,
+    )
+
     total_jobs = sum(len(item["checkpoints"]) for item in sweep_plan)
     progress = tqdm(total=total_jobs, desc="eval sweep", unit="ckpt")
     try:
@@ -572,6 +682,7 @@ def main():
                     script_dir=script_dir,
                     proj_name=args.proj_name,
                     exptid=exptid,
+                    logs_root=logs_root,
                     checkpoint=checkpoint,
                     repeats=args.repeats,
                     gpu_id=selected_gpu,
@@ -597,33 +708,15 @@ def main():
                         aggregate=aggregate,
                     )
                 )
+                write_outputs(
+                    json_path=json_path,
+                    csv_path=csv_path,
+                    json_payload=json_payload,
+                    csv_rows=csv_rows,
+                )
                 progress.update(1)
     finally:
         progress.close()
-
-    json_payload = {
-        "proj_name": args.proj_name,
-        "label": label,
-        "repeats": args.repeats,
-        "checkpoint_start": args.checkpoint_start,
-        "checkpoint_step": args.checkpoint_step,
-        "checkpoint_end": args.checkpoint_end,
-        "selected_gpu": selected_gpu,
-        "logs_root": str(logs_root),
-        "eval_args": eval_args,
-        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
-        "records": records,
-    }
-
-    json_path.parent.mkdir(parents=True, exist_ok=True)
-    with json_path.open("w") as f:
-        json.dump(json_payload, f, indent=2)
-
-    csv_path.parent.mkdir(parents=True, exist_ok=True)
-    with csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
-        writer.writeheader()
-        writer.writerows(csv_rows)
 
     print(f"Wrote sweep JSON: {json_path}")
     print(f"Wrote sweep CSV: {csv_path}")

@@ -15,6 +15,40 @@ from datetime import datetime
 from pathlib import Path
 
 
+def _local_pythonpath_entries():
+    script_path = Path(__file__).resolve()
+    repo_root = script_path.parents[3]
+    return [
+        str(repo_root / "legged_gym"),
+        str(repo_root / "rsl_rl"),
+    ]
+
+
+def _prepend_pythonpath(env, entries):
+    child_env = env.copy()
+    existing = child_env.get("PYTHONPATH")
+    path_parts = [entry for entry in entries if entry]
+    if existing:
+        path_parts.append(existing)
+    child_env["PYTHONPATH"] = os.pathsep.join(path_parts)
+    return child_env
+
+
+def _ensure_python_runtime_lib(env):
+    child_env = env.copy()
+    lib_dir = Path(sys.executable).resolve().parents[1] / "lib"
+    if not lib_dir.exists():
+        return child_env
+    existing = child_env.get("LD_LIBRARY_PATH")
+    if existing:
+        parts = existing.split(os.pathsep)
+        if str(lib_dir) not in parts:
+            child_env["LD_LIBRARY_PATH"] = os.pathsep.join([str(lib_dir), *parts])
+    else:
+        child_env["LD_LIBRARY_PATH"] = str(lib_dir)
+    return child_env
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -179,6 +213,8 @@ def pick_gpu_id():
 
 def evaluation_env(gpu_id):
     env = os.environ.copy()
+    env = _prepend_pythonpath(env, _local_pythonpath_entries())
+    env = _ensure_python_runtime_lib(env)
     if gpu_id is None:
         return env, []
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)

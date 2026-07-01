@@ -13,8 +13,20 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 import faulthandler
+
+SCRIPT_PATH = Path(__file__).resolve()
+REPO_ROOT = SCRIPT_PATH.parents[3]
+LOCAL_PACKAGE_ROOTS = (
+    REPO_ROOT / "legged_gym",
+    REPO_ROOT / "rsl_rl",
+)
+for package_root in reversed(LOCAL_PACKAGE_ROOTS):
+    package_root_str = str(package_root)
+    if package_root_str not in sys.path:
+        sys.path.insert(0, package_root_str)
 
 import isaacgym  # noqa: F401
 import numpy as np
@@ -126,6 +138,12 @@ def _pop_eval_argv():
     parser.add_argument("--eval_episodes", type=int, default=256)
     parser.add_argument("--eval_max_steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument(
+        "--logs_root",
+        type=str,
+        default=None,
+        help="Optional root directory that contains <proj_name>/<exptid> checkpoints.",
+    )
     parser.add_argument(
         "--terrain_set",
         choices=("baseline", "design_new", "new", "all"),
@@ -438,12 +456,38 @@ def _make_eval_env(name, args, env_cfg, terrain_dict):
     return env, env_cfg
 
 
-def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
-    current_learning_iteration = _resolve_inference_iteration(
-        args,
-        getattr(ppo_runner, "_evaluation_resume_dir", None),
-        ppo_runner.alg.actor_critic.post_delay_predictor_start_iter,
-    )
+def _configure_post_delay_eval_mode(env, env_cfg, args, current_learning_iteration):
+    if args.post_delay_predictor_start_iter is None:
+        return
+
+    enable_delay = current_learning_iteration >= args.post_delay_predictor_start_iter
+    delay_schedule = list(env_cfg.domain_rand.action_curr_step)
+    if enable_delay:
+        # Match the explicit --delay evaluation path instead of the headless
+        # scratch path that would otherwise switch to [0, 1].
+        delay_schedule = [1, 1]
+    env_cfg.domain_rand.action_curr_step = list(delay_schedule)
+    env_cfg.domain_rand.action_delay = enable_delay
+    env.cfg.domain_rand.action_curr_step = list(delay_schedule)
+    env.cfg.domain_rand.action_delay = enable_delay
+    if hasattr(env, "delay"):
+        env.delay = torch.tensor(
+            0 if not enable_delay else env.cfg.domain_rand.action_delay_view,
+            device=env.device,
+            dtype=torch.float,
+        )
+
+
+def _run_policy_step(
+    env,
+    obs,
+    infos,
+    ppo_runner,
+    policy,
+    depth_encoder,
+    policy_type,
+    current_learning_iteration,
+):
     delayed_action = _get_predictor_action_context(env, ppo_runner, current_learning_iteration)
     depth_latent = None
     if policy_type == "depth":
@@ -567,7 +611,10 @@ def evaluate(args, eval_cfg):
         env_cfg.terrain.max_error_camera = env_cfg.terrain.max_error
         env_cfg.terrain.horizontal_scale_camera = env_cfg.terrain.horizontal_scale
 
-    log_pth = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.proj_name, args.exptid)
+    if eval_cfg.logs_root is not None:
+        log_pth = os.path.join(eval_cfg.logs_root, args.exptid)
+    else:
+        log_pth = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.proj_name, args.exptid)
     env, env_cfg = _make_eval_env(args.task, args, env_cfg, terrain_dict)
     _install_terminal_snapshot(env)
     obs = env.get_observations()
@@ -584,6 +631,12 @@ def evaluate(args, eval_cfg):
         load_optimizer=False,
     )
     ppo_runner._evaluation_resume_dir = resolved_log_pth
+    current_learning_iteration = _resolve_inference_iteration(
+        args,
+        resolved_log_pth,
+        ppo_runner.alg.actor_critic.post_delay_predictor_start_iter,
+    )
+    _configure_post_delay_eval_mode(env, env_cfg, args, current_learning_iteration)
     policy = ppo_runner.get_inference_policy(device=env.device)
     depth_encoder = (
         ppo_runner.get_depth_encoder_inference_policy(device=env.device)
@@ -633,10 +686,24 @@ def evaluate(args, eval_cfg):
         f"Evaluating {policy_id} ({policy_type}) for {target_eval_episodes} episodes "
         f"with {env.num_envs} envs -> {csv_path}"
     )
+    if args.post_delay_predictor_start_iter is not None:
+        delay_mode = "enabled" if env.cfg.domain_rand.action_delay else "disabled"
+        print(
+            f"[INFO] Checkpoint {current_learning_iteration} vs "
+            f"post-delay threshold {args.post_delay_predictor_start_iter}: "
+            f"delay {delay_mode}, predictor {'enabled' if current_learning_iteration >= args.post_delay_predictor_start_iter else 'disabled'}."
+        )
 
     for step in range(max_steps):
         actions = _run_policy_step(
-            args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type
+            env,
+            obs,
+            infos,
+            ppo_runner,
+            policy,
+            depth_encoder,
+            policy_type,
+            current_learning_iteration,
         )
 
         prev_start_x = start_x.clone()
