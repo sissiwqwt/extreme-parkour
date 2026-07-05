@@ -567,7 +567,7 @@ def _run_actor_module_inference(
         and current_learning_iteration >= actor_critic.post_delay_predictor_start_iter
         and hasattr(actor_module, "predict_next_proprio")
     ):
-        next_proprio = actor_module.predict_next_proprio(
+        next_proprio_prediction = actor_module.predict_next_proprio(
             observations,
             delayed_action,
             hist_encoding=hist_encoding,
@@ -575,9 +575,13 @@ def _run_actor_module_inference(
         )
         imagined_observations = observations.clone()
         alpha = actor_critic.get_post_delay_predictor_alpha(current_learning_iteration)
-        imagined_observations[:, : actor_module.num_prop] = (
-            (1.0 - alpha) * observations[:, : actor_module.num_prop] + alpha * next_proprio
-        )
+        current_proprio = observations[:, : actor_module.num_prop]
+        if actor_critic.predict_next_proprio_residual:
+            imagined_observations[:, : actor_module.num_prop] = current_proprio + alpha * next_proprio_prediction
+        else:
+            imagined_observations[:, : actor_module.num_prop] = (
+                (1.0 - alpha) * current_proprio + alpha * next_proprio_prediction
+            )
         observations = imagined_observations
     return actor_module(
         observations,

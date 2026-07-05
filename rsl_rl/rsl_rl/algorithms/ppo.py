@@ -85,6 +85,7 @@ class PPO:
                  next_proprio_aux_stop_iter=8000,
                  use_post_next_proprio_sup_loss=True,
                  post_next_proprio_sup_coef=0.1,
+                 predict_next_proprio_residual=False,
                  **kwargs
                  ):
 
@@ -117,6 +118,7 @@ class PPO:
         self.next_proprio_aux_stop_iter = next_proprio_aux_stop_iter
         self.use_post_next_proprio_sup_loss = use_post_next_proprio_sup_loss
         self.post_next_proprio_sup_coef = post_next_proprio_sup_coef
+        self.predict_next_proprio_residual = predict_next_proprio_residual
 
         # Adaptation
         self.hist_encoder_optimizer = optim.Adam(self.actor_critic.actor.history_encoder.parameters(), lr=learning_rate)
@@ -306,6 +308,8 @@ class PPO:
                         predictor_sup_coef = self.post_next_proprio_sup_coef
                 if predictor_sup_coef > 0.0:
                     next_proprio_target = next_obs_batch[:, :self.num_prop]
+                    if self.predict_next_proprio_residual:
+                        next_proprio_target = next_proprio_target - obs_batch[:, :self.num_prop]
                     next_proprio_pred = self.actor_critic.predict_next_proprio(
                         obs_batch,
                         env_actions_batch,

@@ -227,6 +227,9 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
             cfg_train.algorithm.use_next_proprio_aux_loss = args.use_aux_proprio_loss
         if hasattr(args, "next_proprio_head_dims") and args.next_proprio_head_dims is not None:
             cfg_train.policy.next_proprio_head_hidden_dims = args.next_proprio_head_dims
+        if hasattr(args, "predict_next_proprio_residual") and args.predict_next_proprio_residual is not None:
+            cfg_train.policy.predict_next_proprio_residual = args.predict_next_proprio_residual
+            cfg_train.algorithm.predict_next_proprio_residual = args.predict_next_proprio_residual
         if hasattr(args, "post_delay_predictor_start_iter") and args.post_delay_predictor_start_iter is not None:
             cfg_train.policy.post_delay_predictor_start_iter = args.post_delay_predictor_start_iter
 
@@ -275,6 +278,7 @@ def get_args():
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
         {"name": "--use_aux_proprio_loss", "type": parse_bool, "default": True, "help": "Enable the pre-8000 next proprio auxiliary prediction loss during base training."},
         {"name": "--next_proprio_head_dims", "type": parse_next_proprio_head_dims, "default": None, "help": "Next proprio head hidden dims preset or explicit list. Presets: small=128,64 medium=256,128 large=256,128,64. Example: --next_proprio_head_dims medium or --next_proprio_head_dims 256,128"},
+        {"name": "--predict_next_proprio_residual", "type": parse_bool, "default": None, "help": "If true, train and use the next proprio head as next-current residual instead of full next proprio."},
         {"name": "--post_delay_predictor_start_iter", "type": int, "default": None, "help": "Iteration to start using the post-delay predictor in policy forward. Defaults to config value 8000."}
 
 

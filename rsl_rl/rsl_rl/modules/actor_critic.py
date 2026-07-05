@@ -228,6 +228,7 @@ class ActorCriticRMA(nn.Module):
         priv_encoder_dims = kwargs.pop('priv_encoder_dims')
         tanh_encoder_output = kwargs.pop('tanh_encoder_output')
         next_proprio_head_hidden_dims = kwargs.pop('next_proprio_head_hidden_dims', [128, 64])
+        self.predict_next_proprio_residual = kwargs.pop('predict_next_proprio_residual', False)
         self.use_post_delay_predictor = kwargs.pop('use_post_delay_predictor', True)
         self.post_delay_predictor_start_iter = kwargs.pop('post_delay_predictor_start_iter', 8000)
         self.post_delay_predictor_alpha_start = kwargs.pop('post_delay_predictor_alpha_start', 0.0)
@@ -318,7 +319,7 @@ class ActorCriticRMA(nn.Module):
         return self.post_delay_predictor_alpha_start + progress * (self.post_delay_predictor_alpha_end - self.post_delay_predictor_alpha_start)
 
     def imagine_next_observation(self, observations, delayed_action, hist_encoding=False, scandots_latent=None, current_learning_iteration=None):
-        next_proprio = self.predict_next_proprio(
+        next_proprio_prediction = self.predict_next_proprio(
             observations,
             delayed_action,
             hist_encoding=hist_encoding,
@@ -326,9 +327,13 @@ class ActorCriticRMA(nn.Module):
         )
         imagined_observations = observations.clone()
         alpha = self.get_post_delay_predictor_alpha(current_learning_iteration)
-        imagined_observations[:, :self.actor.num_prop] = (
-            (1.0 - alpha) * observations[:, :self.actor.num_prop] + alpha * next_proprio
-        )
+        current_proprio = observations[:, :self.actor.num_prop]
+        if self.predict_next_proprio_residual:
+            imagined_observations[:, :self.actor.num_prop] = current_proprio + alpha * next_proprio_prediction
+        else:
+            imagined_observations[:, :self.actor.num_prop] = (
+                (1.0 - alpha) * current_proprio + alpha * next_proprio_prediction
+            )
         return imagined_observations
 
     def compute_action_mean(self, observations, hist_encoding=False, delayed_action=None, current_learning_iteration=None, scandots_latent=None):
