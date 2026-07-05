@@ -8,6 +8,14 @@
 **Paper**: https://arxiv.org/abs/2309.14341  
 **Tweet Summary**: https://twitter.com/pathak2206/status/1706696237703901439
 
+### Project Branches ###
+This repository contains four relevant project branches. Other local branches are archived with the `legacy-` prefix and are not part of the documented project scope.
+
+- `main`: keeps the base Extreme Parkour teacher-student pipeline and adds the expanded evaluation setting for this project. The main additions are new parkour terrain families in `legged_gym/legged_gym/utils/terrain.py`, together with evaluation and play-writer scripts for sweeping checkpoints, recording rollouts, and comparing performance on the expanded terrain distribution.
+- `tt`: implements the task-targeted curriculum. It tracks curriculum progress by terrain family instead of using a single global difficulty state, updates difficulty with waypoint-progress signals, samples levels up to each terrain's current maximum level, adds stronger stuck penalties for failure-prone terrains, and uses a two-phase terrain sampling schedule. This branch targets hard-terrain under-training and improves depth-student transfer by giving the teacher and student better coverage of difficult obstacle families.
+- `heading-model-C`: implements the heading-aware distillation model. The depth student predicts current and next body-frame waypoint directions using sine-cosine heading targets, and also aligns its depth latent with the privileged teacher terrain latent. This branch targets direction-sensitive obstacles such as asymmetric gaps and beam gaps, where lateral alignment and short-horizon route choice are important.
+- `aux-prio-loss`: implements the auxiliary proprioception prediction head for delayed control. The policy predicts the next proprioceptive state, or a residual proprioceptive change, from the current observation and applied delayed action. After action delay is enabled, the actor can use a mixed or predicted proprioceptive input to reduce the mismatch between the observation used to select an action and the state affected when that action is executed.
+
 ### Installation ###
 ```bash
 conda create -n parkour python=3.8
