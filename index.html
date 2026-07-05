@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Extreme Parkour Demo Videos</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5d6875;
+      --line: #d8dee6;
+      --base: #1f6feb;
+      --distill: #238636;
+      --shadow: 0 14px 34px rgba(23, 32, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.5;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    header {
+      background: #111827;
+      color: #fff;
+      padding: 40px 24px 34px;
+      border-bottom: 4px solid #2f80ed;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 48px));
+      margin: 0 auto;
+      padding: 28px 0 54px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-top: 0;
+    }
+
+    h1 {
+      max-width: 1180px;
+      margin: 0 auto 10px;
+      font-size: 38px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    header p {
+      max-width: 1180px;
+      margin: 0 auto;
+      color: #d7deea;
+      font-size: 17px;
+    }
+
+    section {
+      margin-top: 28px;
+    }
+
+    .summary,
+    .policy,
+    .notes {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .summary {
+      padding: 22px 24px;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: #fbfcfe;
+    }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .metric span {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .policy {
+      overflow: hidden;
+    }
+
+    .policy-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 18px;
+      align-items: start;
+      padding: 24px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .policy-head h2 {
+      margin-bottom: 8px;
+      font-size: 26px;
+      letter-spacing: 0;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 32px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge.base {
+      background: var(--base);
+    }
+
+    .badge.distill {
+      background: var(--distill);
+    }
+
+    .details {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, 0.45fr);
+      gap: 16px;
+      padding: 0 24px 22px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .details h3 {
+      margin: 18px 0 8px;
+      font-size: 15px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    code,
+    pre {
+      font-family: Consolas, "Courier New", monospace;
+    }
+
+    pre {
+      margin: 0;
+      padding: 13px 14px;
+      overflow-x: auto;
+      color: #e5e7eb;
+      background: #1f2937;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .checkpoint {
+      display: block;
+      padding: 12px 13px;
+      overflow-wrap: anywhere;
+      background: #eef2f7;
+      border-radius: 8px;
+      color: #283341;
+      font-size: 13px;
+    }
+
+    .video-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      padding: 24px;
+    }
+
+    .video-card {
+      background: #fbfcfe;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .video-card video {
+      display: block;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #0b1020;
+    }
+
+    .video-meta {
+      padding: 13px 14px 15px;
+    }
+
+    .video-meta h3 {
+      margin: 0 0 4px;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .video-meta p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .notes {
+      padding: 22px 24px;
+    }
+
+    .notes ul {
+      margin: 10px 0 0;
+      padding-left: 20px;
+    }
+
+    .notes li + li {
+      margin-top: 6px;
+    }
+
+    footer {
+      width: min(1180px, calc(100% - 48px));
+      margin: 0 auto 30px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 820px) {
+      header {
+        padding: 30px 18px 28px;
+      }
+
+      main,
+      footer {
+        width: min(100% - 28px, 1180px);
+      }
+
+      h1 {
+        font-size: 30px;
+      }
+
+      .summary-grid,
+      .details,
+      .video-grid,
+      .policy-head {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Extreme Parkour Demo Videos</h1>
+    <p>Base teacher policy and distilled camera-based policy demos recorded under the same obstacle difficulty for direct comparison.</p>
+  </header>
+
+  <main>
+    <section class="summary" aria-labelledby="summary-title">
+      <h2 id="summary-title">Demo Setup</h2>
+      <p>Both policy demos were recorded with terrain difficulty <strong>1.0</strong> and camera observations enabled.</p>
+      <div class="summary-grid" aria-label="Demo setup facts">
+        <div class="metric">
+          <strong>Terrain Difficulty</strong>
+          <span>1.0</span>
+        </div>
+        <div class="metric">
+          <strong>Observation Mode</strong>
+          <span>Camera enabled</span>
+        </div>
+        <div class="metric">
+          <strong>Comparison</strong>
+          <span>Teacher vs. distilled policy</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="policy" aria-labelledby="base-title">
+      <div class="policy-head">
+        <div>
+          <h2 id="base-title">Base Teacher Policy</h2>
+          <p>This demo shows the teacher base policy at iteration 7500. This checkpoint was saved before enabling delay, so it represents the non-delayed teacher policy used as the baseline for comparison.</p>
+        </div>
+        <span class="badge base">Base Policy</span>
+      </div>
+      <div class="details">
+        <div>
+          <h3>Command</h3>
+          <pre><code>python base_play.py --headless --exptid base --proj_name parkour_new --use_camera --checkpoint 7500 --terrain_difficulty 1.0</code></pre>
+        </div>
+        <div>
+          <h3>Checkpoint</h3>
+          <code class="checkpoint">legged_gym/logs/parkour_new/base/model_7500.pt</code>
+        </div>
+      </div>
+      <div class="video-grid" id="base-videos"></div>
+    </section>
+
+    <section class="policy" aria-labelledby="distill-title">
+      <div class="policy-head">
+        <div>
+          <h2 id="distill-title">Distilled Policy</h2>
+          <p>This demo shows the distilled policy trained with camera input. The checkpoint used to generate this demo comes from the current depth-latent-loss branch. In this training setup, depth-latent loss is enabled and gradients are directly backpropagated through this loss during policy distillation.</p>
+        </div>
+        <span class="badge distill">Distilled Policy</span>
+      </div>
+      <div class="details">
+        <div>
+          <h3>Command</h3>
+          <pre><code>python distill_play.py --headless --exptid distill --proj_name parkour_new --use_camera --checkpoint 10000 --terrain_difficulty 1.0</code></pre>
+        </div>
+        <div>
+          <h3>Checkpoint</h3>
+          <code class="checkpoint">legged_gym/logs/parkour_new/distill/model_10000.pt</code>
+        </div>
+      </div>
+      <div class="video-grid" id="distill-videos"></div>
+    </section>
+
+    <section class="notes" aria-labelledby="notes-title">
+      <h2 id="notes-title">Comparison Notes</h2>
+      <ul>
+        <li>Both video groups use terrain difficulty <strong>1.0</strong>, so the comparison is made under the same obstacle setting.</li>
+        <li>The base demo represents the teacher policy before delay is enabled.</li>
+        <li>The distill demo represents the camera-based student policy trained with direct gradient backpropagation from the depth-latent loss.</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    Video assets are loaded from the GitHub Release tag <code>demos</code> in <code>sissiwqwt/extreme-parkour</code>.
+  </footer>
+
+  <script>
+    const releaseBase = "https://github.com/sissiwqwt/extreme-parkour/releases/download/demos/";
+
+    const baseVideos = [
+      "alternating_step_1_5_base.mp4",
+      "asymmetric_gap_1_7_base.mp4",
+      "beam_gap_1_6_base.mp4",
+      "climbing_wall_1_10_base.mp4",
+      "demo_1_11_base.mp4",
+      "narrow_gap_1_9_base.mp4",
+      "parkour_1_0_base.mp4",
+      "parkour_flat_1_2_base.mp4",
+      "parkour_gap_1_4_base.mp4",
+      "parkour_hurdle_1_1_base.mp4",
+      "parkour_step_1_3_base.mp4",
+      "parkour_v2_1_8_base.mp4"
+    ];
+
+    const distillVideos = [
+      "alternating_step_1_4_distill.mp4",
+      "asymmetric_gap_1_6_distill.mp4",
+      "beam_gap_1_5_distill.mp4",
+      "climbing_wall_1_9_distill.mp4",
+      "demo_1_10_distill.mp4",
+      "narrow_gap_1_8_distill.mp4",
+      "parkour_1_0_distill.mp4",
+      "parkour_gap_1_3_distill.mp4",
+      "parkour_hurdle_1_1_distill.mp4",
+      "parkour_step_1_2_distill.mp4",
+      "parkour_v2_1_7_distill.mp4"
+    ];
+
+    function titleFromFile(fileName) {
+      return fileName
+        .replace(".mp4", "")
+        .replace(/_(base|distill)$/u, "")
+        .replace(/_/gu, " ")
+        .replace(/\b\w/gu, (letter) => letter.toUpperCase());
+    }
+
+    function renderVideos(targetId, files) {
+      const target = document.getElementById(targetId);
+      const fragment = document.createDocumentFragment();
+
+      files.forEach((fileName) => {
+        const article = document.createElement("article");
+        article.className = "video-card";
+
+        const video = document.createElement("video");
+        video.controls = true;
+        video.preload = "metadata";
+        video.playsInline = true;
+
+        const source = document.createElement("source");
+        source.src = releaseBase + encodeURIComponent(fileName);
+        source.type = "video/mp4";
+        video.appendChild(source);
+
+        const meta = document.createElement("div");
+        meta.className = "video-meta";
+
+        const title = document.createElement("h3");
+        title.textContent = titleFromFile(fileName);
+
+        const url = document.createElement("p");
+        url.textContent = fileName;
+
+        meta.append(title, url);
+        article.append(video, meta);
+        fragment.appendChild(article);
+      });
+
+      target.appendChild(fragment);
+    }
+
+    renderVideos("base-videos", baseVideos);
+    renderVideos("distill-videos", distillVideos);
+  </script>
+</body>
+</html>
