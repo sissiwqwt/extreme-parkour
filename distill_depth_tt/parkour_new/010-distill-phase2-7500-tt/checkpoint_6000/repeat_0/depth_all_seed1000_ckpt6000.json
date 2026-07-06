@@ -1,0 +1,154 @@
+{
+  "csv_path": "/home/zhangmingming/extreme-parkour-tt3/legged_gym/logs/sweep_evaluation/distill_depth_current/parkour_new/010-distill-phase2-7500-tt/checkpoint_6000/repeat_0/depth_all_seed1000_ckpt6000.csv",
+  "resolved_log_path": "/home/zhangmingming/extreme-parkour-tt3/legged_gym/logs/parkour_new/010-distill-phase2-7500-tt",
+  "policy_type": "depth",
+  "terrain_dict": {
+    "smooth slope": 0.0,
+    "rough slope up": 0.0,
+    "rough slope down": 0.0,
+    "rough stairs up": 0.0,
+    "rough stairs down": 0.0,
+    "discrete": 0.0,
+    "stepping stones": 0.0,
+    "gaps": 0.0,
+    "smooth flat": 0.0,
+    "pit": 0.0,
+    "wall": 0.0,
+    "platform": 0.0,
+    "large stairs up": 0.0,
+    "large stairs down": 0.0,
+    "parkour": 0.09090909090909091,
+    "parkour_hurdle": 0.09090909090909091,
+    "parkour_flat": 0.09090909090909091,
+    "parkour_step": 0.09090909090909091,
+    "parkour_gap": 0.09090909090909091,
+    "alternating_step": 0.09090909090909091,
+    "beam_gap": 0.09090909090909091,
+    "asymmetric_gap": 0.09090909090909091,
+    "parkour_v2": 0.09090909090909091,
+    "narrow_gap": 0.09090909090909091,
+    "climbing_wall": 0.09090909090909091,
+    "demo": 0.0
+  },
+  "requested_eval_episodes": 506,
+  "target_eval_episodes": 506,
+  "terrain_episode_targets": {
+    "parkour": 46,
+    "parkour_hurdle": 46,
+    "parkour_flat": 46,
+    "parkour_step": 46,
+    "parkour_gap": 46,
+    "alternating_step": 46,
+    "beam_gap": 46,
+    "asymmetric_gap": 46,
+    "parkour_v2": 46,
+    "narrow_gap": 46,
+    "climbing_wall": 46
+  },
+  "difficulty_sampling_range": [
+    0.7,
+    1.0
+  ],
+  "success_threshold": 1.0,
+  "stuck_window_s": 2.0,
+  "stuck_threshold_m": 0.1,
+  "metrics": {
+    "episodes": 506,
+    "success_rate": 0.8399209486166008,
+    "fall_rate": 0.15810276679841898,
+    "stuck_rate": 0.001976284584980237,
+    "mean_mxd": 11.13923092710642,
+    "mean_normalized_waypoints": 0.920701581027668,
+    "mean_edge_violation": 0.11083357463301897
+  },
+  "terrain_metrics": {
+    "parkour": {
+      "episodes": 46,
+      "success_rate": 0.7391304347826086,
+      "fall_rate": 0.2608695652173913,
+      "stuck_rate": 0.0,
+      "mean_mxd": 7.258919065413267,
+      "mean_edge_violation": 0.0936510721423001
+    },
+    "asymmetric_gap": {
+      "episodes": 46,
+      "success_rate": 0.2826086956521739,
+      "fall_rate": 0.717391304347826,
+      "stuck_rate": 0.0,
+      "mean_mxd": 6.7922205328941345,
+      "mean_edge_violation": 0.08570408461404488
+    },
+    "parkour_gap": {
+      "episodes": 46,
+      "success_rate": 0.717391304347826,
+      "fall_rate": 0.2826086956521739,
+      "stuck_rate": 0.0,
+      "mean_mxd": 12.407761633396149,
+      "mean_edge_violation": 0.08559445567704199
+    },
+    "beam_gap": {
+      "episodes": 46,
+      "success_rate": 0.8260869565217391,
+      "fall_rate": 0.17391304347826086,
+      "stuck_rate": 0.0,
+      "mean_mxd": 14.35847942336746,
+      "mean_edge_violation": 0.04551516731221065
+    },
+    "parkour_v2": {
+      "episodes": 46,
+      "success_rate": 0.6956521739130435,
+      "fall_rate": 0.30434782608695654,
+      "stuck_rate": 0.0,
+      "mean_mxd": 11.5018319396869,
+      "mean_edge_violation": 0.1096529908629957
+    },
+    "parkour_step": {
+      "episodes": 46,
+      "success_rate": 1.0,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.0,
+      "mean_mxd": 10.047574393127276,
+      "mean_edge_violation": 0.0429794207190326
+    },
+    "parkour_hurdle": {
+      "episodes": 46,
+      "success_rate": 1.0,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.0,
+      "mean_mxd": 12.62535390516986,
+      "mean_edge_violation": 0.04544591811977049
+    },
+    "alternating_step": {
+      "episodes": 46,
+      "success_rate": 1.0,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.0,
+      "mean_mxd": 12.051902729531992,
+      "mean_edge_violation": 0.069378316522449
+    },
+    "narrow_gap": {
+      "episodes": 46,
+      "success_rate": 0.9782608695652174,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.021739130434782608,
+      "mean_mxd": 9.16008885787881,
+      "mean_edge_violation": 0.2507171127300763
+    },
+    "climbing_wall": {
+      "episodes": 46,
+      "success_rate": 1.0,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.0,
+      "mean_mxd": 11.019013612166695,
+      "mean_edge_violation": 0.39053078226328725
+    },
+    "parkour_flat": {
+      "episodes": 46,
+      "success_rate": 1.0,
+      "fall_rate": 0.0,
+      "stuck_rate": 0.0,
+      "mean_mxd": 15.308394105538078,
+      "mean_edge_violation": 0.0
+    }
+  }
+}

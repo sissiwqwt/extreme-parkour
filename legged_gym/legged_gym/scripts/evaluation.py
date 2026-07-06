@@ -154,6 +154,12 @@ def _pop_eval_argv():
         default="auto",
         help="auto uses --use_camera to choose depth vs base inference.",
     )
+    parser.add_argument(
+        "--mask_priv_explicit",
+        action="store_true",
+        default=False,
+        help="For depth policy evaluation, zero the privileged explicit observation slice.",
+    )
     ns, rest = parser.parse_known_args()
     sys.argv = [sys.argv[0]] + rest
     return ns
@@ -399,7 +405,9 @@ def _make_eval_env(name, args, env_cfg, terrain_dict):
 
 def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, policy_type):
     depth_latent = None
+    actor_obs = obs
     if policy_type == "depth":
+        actor_obs = obs.clone()
         if infos.get("depth") is not None:
             obs_student = obs[:, : env.cfg.env.n_proprio].clone()
             obs_student[:, 6:8] = 0
@@ -407,14 +415,18 @@ def _run_policy_step(args, env, obs, infos, ppo_runner, policy, depth_encoder, p
                 depth_latent_and_yaw = depth_encoder(infos["depth"], obs_student)
             depth_latent = depth_latent_and_yaw[:, :-2]
             yaw = depth_latent_and_yaw[:, -2:]
-            obs[:, 6:8] = 1.5 * yaw
+            actor_obs[:, 6:8] = 1.5 * yaw
+        if getattr(args, "mask_priv_explicit", False):
+            priv_start = env.cfg.env.n_proprio + env.cfg.env.n_scan
+            priv_end = priv_start + env.cfg.env.n_priv
+            actor_obs[:, priv_start:priv_end] = 0
 
     with torch.no_grad():
         if policy_type == "depth" and hasattr(ppo_runner.alg, "depth_actor"):
             return ppo_runner.alg.depth_actor(
-                obs.detach(), hist_encoding=True, scandots_latent=depth_latent
+                actor_obs.detach(), hist_encoding=True, scandots_latent=depth_latent
             )
-        return policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
+        return policy(actor_obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
 
 
 def evaluate(args, eval_cfg):

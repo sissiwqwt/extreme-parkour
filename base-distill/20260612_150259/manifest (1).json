@@ -1,0 +1,25 @@
+{
+  "output_root": "/home/zhangmingming/extreme-parkour-distill-nodelay/legged_gym/logs/sweep_evaluation/20260612_150259",
+  "experiments": [
+    {
+      "proj_name": "parkour_new",
+      "exptid": "02-new-terrain-distill"
+    }
+  ],
+  "metrics": [
+    "success_rate",
+    "mean_mxd",
+    "mean_normalized_waypoints",
+    "fall_rate",
+    "stuck_rate",
+    "mean_edge_violation",
+    "mean_heading_loss"
+  ],
+  "repeats": 7,
+  "start_step": 2400,
+  "interval": 400,
+  "dense_after_step": 5000,
+  "num_completed_runs": 266,
+  "num_summary_rows": 38,
+  "skipped": []
+}
